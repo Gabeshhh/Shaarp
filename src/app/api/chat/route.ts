@@ -2,7 +2,9 @@ import { openai } from '@ai-sdk/openai';
 import { streamText } from 'ai';
 import { scrapeExhibitorsStream, ScrapeProgressEvent } from '@/lib/tools/scrapeExhibitors';
 
+export const runtime = 'nodejs';
 export const maxDuration = 300; // 5 minutes for deep scraping
+export const dynamic = 'force-dynamic';
 
 // Simple URL detection
 function extractUrl(text: string): string | null {
@@ -11,7 +13,15 @@ function extractUrl(text: string): string | null {
 }
 
 export async function POST(req: Request) {
-  const body = await req.json();
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json(
+      { error: 'Corps de requête JSON invalide.' },
+      { status: 400, headers: { 'Cache-Control': 'no-store' } }
+    );
+  }
   
   const rawMessages = body.messages || [];
   const messages = rawMessages.map((m: any) => {
@@ -43,7 +53,10 @@ export async function POST(req: Request) {
             controller.enqueue(encoder.encode(line));
           }
         } catch (error: any) {
-          const errorEvent: ScrapeProgressEvent = { type: 'error', message: error.message };
+          const errorEvent: ScrapeProgressEvent = {
+            type: 'error',
+            message: error?.message || 'Erreur inconnue côté scraping.',
+          };
           controller.enqueue(encoder.encode(JSON.stringify(errorEvent) + '\n'));
         } finally {
           controller.close();
@@ -53,9 +66,9 @@ export async function POST(req: Request) {
 
     return new Response(stream, {
       headers: {
-        'Content-Type': 'text/plain; charset=utf-8',
-        'Transfer-Encoding': 'chunked',
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
         'X-Scrape-Stream': 'true',
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
       },
     });
   }

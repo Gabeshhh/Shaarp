@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react';
 import { ExhibitorsTable } from '@/components/ExhibitorsTable';
 import { Chat } from '@/components/Chat';
 import { ScrapeProgress } from '@/components/ScrapeProgress';
+import { ContactsPanel } from '@/components/ContactsPanel';
 import { Exhibitor } from '@/lib/schema';
 import { Sparkles } from 'lucide-react';
 
@@ -51,7 +52,9 @@ export default function Home() {
         }),
       });
 
-      const isScrapeStream = res.headers.get('X-Scrape-Stream') === 'true';
+      const contentType = (res.headers.get('content-type') || '').toLowerCase();
+      const isNdjson = contentType.includes('application/x-ndjson');
+      const isScrapeStream = res.headers.get('X-Scrape-Stream') === 'true' || isNdjson;
 
       if (isScrapeStream && hasUrl) {
         setExhibitors([]);
@@ -161,6 +164,31 @@ export default function Home() {
           }
         }
       } else {
+        const isHtml = contentType.includes('text/html');
+        if (!res.ok) {
+          const raw = await res.text().catch(() => '');
+          const msg = raw && !isHtml ? raw : 'Erreur serveur (réponse non exploitable).';
+          const errorMsg: Message = {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            content: `❌ ${msg}`,
+          };
+          setMessages(prev => [...prev, errorMsg]);
+          setProgress({ active: false, status: `Erreur HTTP ${res.status}`, current: 0, total: 0, phase: 'error' });
+          return;
+        }
+
+        if (hasUrl && !isScrapeStream && isHtml) {
+          const errorMsg: Message = {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            content: '❌ Erreur : la réponse du serveur est invalide. Vérifiez que l’API de scraping est bien activée.',
+          };
+          setMessages(prev => [...prev, errorMsg]);
+          setProgress({ active: false, status: 'Réponse HTML inattendue', current: 0, total: 0, phase: 'error' });
+          return;
+        }
+
         const reader = res.body?.getReader();
         const decoder = new TextDecoder();
         let assistantContent = '';
@@ -238,7 +266,12 @@ export default function Home() {
             phase={progress.phase}
           />
         )}
-        <ExhibitorsTable exhibitors={exhibitors} />
+        <div className="flex flex-1 overflow-hidden flex-col lg:flex-row">
+          <div className="flex-1 overflow-hidden">
+            <ExhibitorsTable exhibitors={exhibitors} />
+          </div>
+          <ContactsPanel exhibitors={exhibitors} />
+        </div>
       </div>
     </div>
   );

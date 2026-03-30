@@ -6,6 +6,44 @@ import { extractionProcessSchema, singleExhibitorProcessSchema, Exhibitor } from
 
 const randomDelay = (min = 800, max = 1500) => new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min)) + min));
 
+function uniq(values: string[]) {
+  return Array.from(new Set(values.map(v => v.trim()).filter(Boolean)));
+}
+
+function extractEmails(text: string) {
+  const matches = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) ?? [];
+  return uniq(matches);
+}
+
+function extractPhones(text: string) {
+  // Heuristique volontairement permissive (formats internationaux + séparateurs)
+  const matches = text.match(/(\+?\d[\d\s().-]{6,}\d)/g) ?? [];
+  const cleaned = matches
+    .map(m => m.replace(/\s+/g, ' ').trim())
+    .filter(m => m.replace(/[^\d]/g, '').length >= 8);
+  return uniq(cleaned);
+}
+
+function isProbablyWebsite(href: string) {
+  try {
+    const u = new URL(href);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    const host = u.hostname.toLowerCase();
+    if (!host || host === 'localhost') return false;
+    if (host.includes('twitter.com') || host.includes('x.com') || host.includes('linkedin.com')) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function pickBestWebsite(urls: string[]) {
+  const clean = uniq(urls).filter(isProbablyWebsite);
+  if (clean.length === 0) return '';
+  // Préfère une URL courte (souvent domaine principal)
+  return clean.sort((a, b) => a.length - b.length)[0];
+}
+
 async function autoScroll(page: Page) {
   await page.evaluate(async () => {
     await new Promise<void>((resolve) => {
@@ -140,20 +178,51 @@ async function scrapeExhibitorDetail(
     await page.goto(url, { waitUntil: 'networkidle', timeout: 20000 });
     await randomDelay(500, 1000);
 
-    const pageText = await page.evaluate(() => {
+    const { pageText, mailtos, tels, hrefs } = await page.evaluate(() => {
       document.querySelectorAll('script, style, noscript, svg, iframe').forEach(el => el.remove());
       const main = document.querySelector('main') || document.querySelector('#content') || document.querySelector('article') || document.body;
-      return main.innerText.substring(0, 30000);
+      const anchors = Array.from(document.querySelectorAll('a[href]')) as HTMLAnchorElement[];
+      const hrefList = anchors.map(a => a.href).filter(Boolean);
+      const mailtoList = hrefList
+        .filter(h => h.startsWith('mailto:'))
+        .map(h => h.replace(/^mailto:/i, '').split('?')[0]);
+      const telList = hrefList
+        .filter(h => h.startsWith('tel:'))
+        .map(h => h.replace(/^tel:/i, ''));
+      return {
+        pageText: main.innerText.substring(0, 30000),
+        mailtos: mailtoList,
+        tels: telList,
+        hrefs: hrefList,
+      };
     });
 
     if (!pageText || pageText.trim().length < 50) {
       return { name: fallbackName, website: '', booth: '', linkedin: '', twitter: '', email: '', phone: '' };
     }
 
+    const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
+
+    // Fallback “sans LLM”: extraction regex + mailto/tel + liens externes
+    if (!hasOpenAIKey) {
+      const emails = uniq([...mailtos, ...extractEmails(pageText)]);
+      const phones = uniq([...tels, ...extractPhones(pageText)]);
+      const website = pickBestWebsite(hrefs) || url;
+      return {
+        name: fallbackName,
+        website,
+        booth: '',
+        linkedin: '',
+        twitter: '',
+        email: emails.join('; '),
+        phone: phones.join('; '),
+      };
+    }
+
     const { object } = await generateObject({
       model: openai.chat('gpt-4o-mini'),
       schema: zodSchema(singleExhibitorProcessSchema),
-      prompt: `Voici le contenu d'une fiche exposant. TA MISSION : Extraire UNIQUEMENT les COORDONNÉES DE CONTACT (email, téléphone, site web, booth, réseaux sociaux). 
+      prompt: `Voici le contenu d'une fiche exposant. TA MISSION : Extraire UNIQUEMENT les COORDONNÉES DE CONTACT (email, téléphone, site web, booth, réseaux sociaux).
 
 IMPORTANT : Ne perds pas de temps avec les descriptions, l'historique de l'entreprise ou les présentations marketing. Ignore tout ce qui n'est pas un contact direct.
 
@@ -251,19 +320,61 @@ export async function* scrapeExhibitorsStream(url: string): AsyncGenerator<Scrap
       // Fallback: no detail links found, use LLM on the listing page text
       yield { type: 'status', message: `⚡ Aucun lien de détail trouvé. Extraction directe depuis la liste...` };
 
-      const pageData = await page.evaluate(() => {
+      const { pageTitle, pageUrl, pageData } = await page.evaluate(() => {
         document.querySelectorAll('script, style, noscript, svg, iframe').forEach(el => el.remove());
         const main = document.querySelector('main') || document.querySelector('#content') || document.body;
-        return main.innerText.substring(0, 150000);
+        return {
+          pageTitle: document.title || '',
+          pageUrl: window.location.href || '',
+          pageData: main.innerText.substring(0, 150000),
+        };
       });
+
+      if (!pageData || pageData.trim().length < 50) {
+        yield { type: 'error', message: '❌ Impossible d’extraire le contenu de la page de liste.' };
+        return;
+      }
+
+      const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
+      if (!hasOpenAIKey) {
+        const emails = extractEmails(pageData);
+        const phones = extractPhones(pageData);
+        const website = url;
+
+        yield {
+          type: 'exhibitor',
+          exhibitor: {
+            name: pageTitle || 'Liste exposants',
+            website,
+            booth: '',
+            linkedin: '',
+            twitter: '',
+            email: emails.join('; '),
+            phone: phones.join('; '),
+          },
+          current: 1,
+          total: 1,
+        };
+        yield { type: 'done', total: 1, message: `✅ Extraction terminée (mode sans OpenAI).` };
+        return;
+      }
 
       const { object } = await generateObject({
         model: openai.chat('gpt-4o-mini'),
         schema: zodSchema(extractionProcessSchema),
-        prompt: `Voici le contenu d'un site de salon professionnel. 
-TA MISSION : Extraire TOUS les exposants avec UNIQUEMENT leurs COORDONNÉES DE CONTACT (email, téléphone, site web, stand/booth, réseaux sociaux). 
+        prompt: `Voici le contenu d'un site de salon professionnel.
+TA MISSION : Extraire TOUS les exposants avec UNIQUEMENT leurs COORDONNÉES DE CONTACT (email, téléphone, site web, stand/booth, réseaux sociaux).
 
-IMPORTANT : Ignore totalement les descriptions, les slogans ou les présentations d'activités. Ne remplis que les champs de contact.`,
+INSTRUCTIONS IMPORTANTES :
+- RÉPONDS UNIQUEMENT avec un JSON strict correspondant au schéma fourni.
+- Renvoie un objet { "exhibitors": [ ... ] } avec les champs exacts : name, website, booth, email, phone, linkedin, twitter.
+- Si un champ n'existe pas, renvoie une chaîne vide.
+- Ne fournis aucun texte explicatif, aucun commentaire, ni aucune mise en forme additionnelle.
+
+Titre de la page : ${pageTitle}
+URL : ${pageUrl}
+
+Contenu de la page :\n\n${pageData}`,
       });
 
       for (let i = 0; i < object.exhibitors.length; i++) {
