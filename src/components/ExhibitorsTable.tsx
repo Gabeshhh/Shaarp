@@ -69,18 +69,18 @@ export function ExhibitorsTable({ exhibitors }: ExhibitorsTableProps) {
 
   if (exhibitors.length === 0) {
     return (
-      <div className="flex h-full flex-col items-center justify-center p-8 text-center">
+      <div className="flex h-full flex-col items-center justify-center p-8 text-center bg-slate-950 text-slate-100">
         <div className="flex flex-col items-center gap-5 max-w-sm">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/8 border border-primary/10">
-            <Building2 size={28} className="text-primary/40" />
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-900 border border-slate-800">
+            <Building2 size={28} className="text-blue-300/70" />
           </div>
           <div>
-            <h2 className="text-base font-semibold text-foreground mb-1">Aucune entreprise extraite</h2>
-            <p className="text-sm text-muted-foreground leading-relaxed">
+            <h2 className="text-base font-semibold text-slate-100 mb-1">Aucune entreprise extraite</h2>
+            <p className="text-sm text-slate-400 leading-relaxed">
               Collez l&apos;URL d&apos;un salon professionnel dans l&apos;assistant pour démarrer l&apos;extraction des contacts.
             </p>
           </div>
-          <div className="flex items-center gap-4 text-xs text-muted-foreground/60 border border-border rounded-lg px-4 py-3 bg-card w-full">
+          <div className="flex items-center gap-4 text-xs text-slate-400 border border-slate-800 rounded-lg px-4 py-3 bg-slate-900 w-full">
             <div className="flex items-center gap-1.5"><Mail size={12} /> Emails</div>
             <div className="flex items-center gap-1.5"><Phone size={12} /> Téléphones</div>
             <div className="flex items-center gap-1.5"><Globe size={12} /> Sites web</div>
@@ -91,40 +91,40 @@ export function ExhibitorsTable({ exhibitors }: ExhibitorsTableProps) {
   }
 
   return (
-    <div className="flex h-full flex-col p-4 gap-3">
+    <div className="flex h-full flex-col p-4 gap-3 bg-slate-950 text-slate-100">
       {/* Stats + toolbar */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-card rounded-xl border border-border px-4 py-3 shadow-sm shrink-0">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-slate-900 rounded-xl border border-slate-800 px-4 py-3 shadow-sm shrink-0">
         <div className="flex items-center gap-5">
           <div className="flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
               <Users size={15} className="text-primary" />
             </div>
             <div>
-              <p className="text-lg font-bold text-foreground leading-none">{exhibitors.length}</p>
-              <p className="text-[10px] text-muted-foreground mt-0.5">entreprises</p>
+              <p className="text-lg font-bold text-slate-100 leading-none">{exhibitors.length}</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">entreprises</p>
             </div>
           </div>
-          <div className="h-8 w-px bg-border" />
-          <div className="flex items-center gap-4 text-xs text-muted-foreground">
+          <div className="h-8 w-px bg-slate-700" />
+          <div className="flex items-center gap-4 text-xs text-slate-300">
             <span className="flex items-center gap-1.5">
               <Mail size={12} className="text-emerald-500" />
-              <span className="font-medium text-foreground">{withEmail}</span> emails
+              <span className="font-medium text-slate-100">{withEmail}</span> emails
             </span>
             <span className="flex items-center gap-1.5">
               <Phone size={12} className="text-blue-500" />
-              <span className="font-medium text-foreground">{withPhone}</span> tél.
+              <span className="font-medium text-slate-100">{withPhone}</span> tél.
             </span>
           </div>
         </div>
 
-        <div className="flex w-full sm:w-auto items-center gap-2">
-          <div className="relative w-full sm:w-56">
-            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+        <div className="flex w-full sm:w-auto sm:ml-auto items-center gap-2 min-w-0">
+          <div className="relative w-full sm:w-[250px] max-w-full">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <Input
               placeholder="Rechercher..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-8 h-8 text-xs"
+              className="w-full pl-8 h-8 text-xs bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-400"
             />
           </div>
           <Button onClick={handleExport} size="sm" className="h-8 gap-1.5 text-xs shrink-0">
@@ -135,31 +135,31 @@ export function ExhibitorsTable({ exhibitors }: ExhibitorsTableProps) {
       </div>
 
       {/* Table */}
-      <div className="flex-1 rounded-xl border border-border bg-card overflow-auto shadow-sm">
+      <div className="flex-1 rounded-xl border border-slate-800 bg-slate-900 overflow-auto shadow-sm">
         <Table>
           <TableHeader className="sticky top-0 z-10">
-            <TableRow className="bg-muted/60 hover:bg-muted/60 border-b border-border">
-              <TableHead className="text-xs font-semibold text-muted-foreground py-3 pl-4">Entreprise</TableHead>
-              <TableHead className="text-xs font-semibold text-muted-foreground py-3 w-24">Stand</TableHead>
-              <TableHead className="text-xs font-semibold text-muted-foreground py-3">Contact</TableHead>
-              <TableHead className="text-xs font-semibold text-muted-foreground py-3 w-24">Réseaux</TableHead>
+            <TableRow className="bg-slate-800/80 hover:bg-slate-800/80 border-b border-slate-700">
+              <TableHead className="text-xs font-semibold text-slate-300 py-3 pl-4">Entreprise</TableHead>
+              <TableHead className="text-xs font-semibold text-slate-300 py-3 w-24">Stand</TableHead>
+              <TableHead className="text-xs font-semibold text-slate-300 py-3">Contact</TableHead>
+              <TableHead className="text-xs font-semibold text-slate-300 py-3 w-24">Réseaux</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filteredExhibitors.map((ex, i) => (
-              <TableRow key={i} className="group hover:bg-muted/30 transition-colors border-b border-border/50 last:border-0">
+              <TableRow key={i} className="group hover:bg-slate-800/40 transition-colors border-b border-slate-800 last:border-0">
                 {/* Company */}
                 <TableCell className="py-3 pl-4">
                   <div className="flex items-center gap-3">
                     <CompanyAvatar name={ex.name} />
                     <div className="flex flex-col gap-0.5 min-w-0">
-                      <span className="text-sm font-medium text-foreground truncate">{ex.name}</span>
+                      <span className="text-sm font-medium text-slate-100 truncate">{ex.name}</span>
                       {ex.website && ex.website !== '' && (
                         <a
                           href={ex.website}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-[11px] text-primary/70 flex items-center gap-1 hover:text-primary transition-colors truncate w-fit"
+                        className="text-[11px] text-blue-300/80 flex items-center gap-1 hover:text-blue-200 transition-colors truncate w-fit"
                         >
                           <Globe size={10} />
                           {ex.website.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}
@@ -172,11 +172,11 @@ export function ExhibitorsTable({ exhibitors }: ExhibitorsTableProps) {
                 {/* Stand */}
                 <TableCell className="py-3">
                   {ex.booth && ex.booth !== '' ? (
-                    <span className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground border border-border">
+                    <span className="inline-flex items-center rounded-md bg-slate-800 px-2 py-0.5 text-xs font-medium text-slate-300 border border-slate-700">
                       {ex.booth}
                     </span>
                   ) : (
-                    <span className="text-xs text-muted-foreground/30">—</span>
+                    <span className="text-xs text-slate-500">—</span>
                   )}
                 </TableCell>
 
@@ -186,20 +186,20 @@ export function ExhibitorsTable({ exhibitors }: ExhibitorsTableProps) {
                     {ex.email && ex.email !== '' && (
                       <a
                         href={`mailto:${ex.email}`}
-                        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors group/link"
+                        className="flex items-center gap-1.5 text-xs text-slate-300 hover:text-slate-100 transition-colors group/link"
                       >
                         <Mail size={11} className="text-emerald-500 shrink-0" />
                         <span className="truncate max-w-[200px]">{ex.email}</span>
                       </a>
                     )}
                     {ex.phone && ex.phone !== '' && (
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <div className="flex items-center gap-1.5 text-xs text-slate-300">
                         <Phone size={11} className="text-blue-500 shrink-0" />
                         <span>{ex.phone}</span>
                       </div>
                     )}
                     {(!ex.email || ex.email === '') && (!ex.phone || ex.phone === '') && (
-                      <span className="text-xs text-muted-foreground/30">—</span>
+                      <span className="text-xs text-slate-500">—</span>
                     )}
                   </div>
                 </TableCell>
@@ -224,13 +224,13 @@ export function ExhibitorsTable({ exhibitors }: ExhibitorsTableProps) {
                         target="_blank"
                         rel="noreferrer"
                         title="X / Twitter"
-                        className="flex h-7 w-7 items-center justify-center rounded-md bg-foreground/5 text-foreground/60 hover:bg-foreground/10 transition-colors text-[10px] font-bold border border-border"
+                        className="flex h-7 w-7 items-center justify-center rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors text-[10px] font-bold border border-slate-700"
                       >
                         𝕏
                       </a>
                     )}
                     {(!ex.linkedin || ex.linkedin === '') && (!ex.twitter || ex.twitter === '') && (
-                      <span className="text-xs text-muted-foreground/30">—</span>
+                      <span className="text-xs text-slate-500">—</span>
                     )}
                   </div>
                 </TableCell>
@@ -238,7 +238,7 @@ export function ExhibitorsTable({ exhibitors }: ExhibitorsTableProps) {
             ))}
             {filteredExhibitors.length === 0 && (
               <TableRow>
-                <TableCell colSpan={4} className="h-24 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={4} className="h-24 text-center text-sm text-slate-400">
                   Aucune entreprise trouvée pour « {search} »
                 </TableCell>
               </TableRow>

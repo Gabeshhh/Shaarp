@@ -234,43 +234,45 @@ export default function Home() {
   }, [messages]);
 
   return (
-    <div className="flex h-screen w-full flex-col bg-background text-foreground md:flex-row font-sans">
-      {/* Sidebar */}
-      <div className="flex w-full flex-col md:h-full md:w-[380px] lg:w-[420px] overflow-hidden bg-slate-900 border-r border-slate-800">
-        {/* Header */}
-        <div className="flex h-16 items-center px-5 shrink-0 border-b border-slate-800">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500 shadow-lg shadow-blue-500/30">
-              <Sparkles size={16} className="text-white" />
-            </div>
-            <div>
-              <h1 className="text-sm font-semibold text-white tracking-tight leading-none">Shaarp Scraper</h1>
-              <p className="text-xs text-slate-500 mt-0.5">Intelligence B2B</p>
-            </div>
-          </div>
-        </div>
-        <Chat
-          messages={messages}
-          sendMessage={sendMessage}
-          isLoading={isLoading}
+    <div className="flex h-screen w-full flex-col bg-background text-foreground font-sans overflow-hidden">
+      {progress.active && (
+        <ScrapeProgress
+          status={progress.status}
+          current={progress.current}
+          total={progress.total}
+          phase={progress.phase}
         />
-      </div>
+      )}
 
-      {/* Main panel */}
-      <div className="flex flex-1 flex-col overflow-hidden">
-        {progress.active && (
-          <ScrapeProgress
-            status={progress.status}
-            current={progress.current}
-            total={progress.total}
-            phase={progress.phase}
-          />
-        )}
-        <div className="flex flex-1 overflow-hidden flex-col lg:flex-row">
-          <div className="flex-1 overflow-hidden">
-            <ExhibitorsTable exhibitors={exhibitors} />
-          </div>
+      <div className="flex flex-1 overflow-y-auto overflow-x-hidden flex-col lg:flex-row">
+        {/* Tableau à gauche */}
+        <div className="flex-1 overflow-hidden order-1">
+          <ExhibitorsTable exhibitors={exhibitors} />
+        </div>
+
+        {/* Contacts au milieu */}
+        <div className="order-2">
           <ContactsPanel exhibitors={exhibitors} />
+        </div>
+
+        {/* Chat complètement à droite */}
+        <div className="flex w-full flex-col overflow-hidden bg-slate-900 border-l border-slate-800 order-3 lg:w-[380px] xl:w-[420px]">
+          <div className="flex h-16 items-center px-5 shrink-0 border-b border-slate-800">
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500 shadow-lg shadow-blue-500/30">
+                <Sparkles size={16} className="text-white" />
+              </div>
+              <div>
+                <h1 className="text-sm font-semibold text-white tracking-tight leading-none">Shaarp Scraper</h1>
+                <p className="text-xs text-slate-500 mt-0.5">Intelligence B2B</p>
+              </div>
+            </div>
+          </div>
+          <Chat
+            messages={messages}
+            sendMessage={sendMessage}
+            isLoading={isLoading}
+          />
         </div>
       </div>
     </div>

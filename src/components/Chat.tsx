@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Send, Bot, Loader2, Link2 } from 'lucide-react';
+import { Send, Bot, Loader2, Link2, MessageSquare } from 'lucide-react';
 
 interface Message {
   id: string;
@@ -18,6 +18,7 @@ interface ChatProps {
 
 export function Chat({ messages, sendMessage, isLoading }: ChatProps) {
   const [inputValue, setInputValue] = useState('');
+  const [chatbotPrompt, setChatbotPrompt] = useState('');
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -35,6 +36,14 @@ export function Chat({ messages, sendMessage, isLoading }: ChatProps) {
     if (!trimmed || isLoading) return;
     sendMessage(trimmed);
     setInputValue('');
+  };
+
+  const handleChatbotSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = chatbotPrompt.trim();
+    if (!trimmed || isLoading) return;
+    sendMessage(trimmed);
+    setChatbotPrompt('');
   };
 
   return (
@@ -64,6 +73,25 @@ export function Chat({ messages, sendMessage, isLoading }: ChatProps) {
                   </div>
                 ))}
               </div>
+              <form onSubmit={handleChatbotSubmit} className="mt-1">
+                <div className="relative">
+                  <MessageSquare size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-300/80" />
+                  <Input
+                    value={chatbotPrompt}
+                    onChange={(e) => setChatbotPrompt(e.target.value)}
+                    placeholder="Pose une question au chatbot GPT-4 (ex: Qui expose dans la cybersécurité ?)"
+                    className="pl-8 pr-24 text-xs bg-slate-800 border-slate-700 text-slate-200 placeholder:text-slate-500 focus-visible:ring-blue-500/50 focus-visible:border-blue-500/50 h-10"
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={isLoading || chatbotPrompt.trim().length === 0}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 h-8 px-3 bg-blue-600 hover:bg-blue-500 text-white"
+                  >
+                    Envoyer
+                  </Button>
+                </div>
+              </form>
             </div>
           )}
 
@@ -108,7 +136,7 @@ export function Chat({ messages, sendMessage, isLoading }: ChatProps) {
             <Input
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
-              placeholder="https://salon-exemple.com/exposants"
+              placeholder="Collez une URL ou posez une question au chatbot GPT-4"
               className="pl-8 text-xs bg-slate-800 border-slate-700 text-slate-200 placeholder:text-slate-600 focus-visible:ring-blue-500/50 focus-visible:border-blue-500/50 h-9"
             />
           </div>

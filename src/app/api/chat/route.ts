@@ -12,6 +12,19 @@ function extractUrl(text: string): string | null {
   return match ? match[0] : null;
 }
 
+function localChatbotReply(userText: string): string {
+  const t = userText.trim();
+  const lower = t.toLowerCase();
+  if (!t) return 'Je suis là. Dis-moi ce que tu veux faire.';
+  if (/(bonjour|salut|hello|bonsoir)/i.test(lower)) {
+    return 'Bonjour ! Je suis prêt. Envoie-moi une URL d’exposants ou pose-moi une question, et je t’aide tout de suite.';
+  }
+  if (/(merci|thx|thanks)/i.test(lower)) {
+    return 'Avec plaisir ! Si tu veux, je peux aussi te proposer la prochaine étape.';
+  }
+  return `Bien reçu. J’ai noté : "${t}".\n\nTu peux soit :\n- coller une URL de salon pour lancer l’extraction,\n- soit me poser une question précise (analyse, tri, résumé des contacts).`;
+}
+
 export async function POST(req: Request) {
   let body: any;
   try {
@@ -73,16 +86,38 @@ export async function POST(req: Request) {
     });
   }
 
-  // No URL: just chat normally
-  const result = streamText({
-    model: openai.chat('gpt-4o-mini'),
-    messages,
-    system: `Tu es "Shaarp Expo Scraper", un agent d'extraction B2B.
+  // No URL: chat mode
+  const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
+  if (!hasOpenAIKey) {
+    const text = localChatbotReply(lastUserMsg?.content || '');
+    return new Response(text, {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-store',
+      },
+    });
+  }
+
+  try {
+    const result = streamText({
+      model: openai.chat('gpt-4o'),
+      messages,
+      system: `Tu es "Shaarp Expo Scraper", un agent d'extraction B2B.
 Ton rôle est d'extraire la liste des exposants depuis les sites web de salons professionnels.
 Si l'utilisateur te fournit une URL, tu vas analyser la page et extraire les données.
-Si l'utilisateur ne fournit pas d'URL, demande-lui poliment de fournir l'URL de la page d'exposants du salon qu'il souhaite analyser.
+Si l'utilisateur ne fournit pas d'URL, réponds comme ChatGPT: utile, clair, naturel, conversationnel.
 Reste toujours courtois, professionnel et concis.`,
-  });
+    });
 
-  return result.toTextStreamResponse();
+    return result.toTextStreamResponse();
+  } catch (error: any) {
+    const fallback = `Je rencontre un souci temporaire avec GPT-4 (${error?.message || 'erreur inconnue'}).\n\n${localChatbotReply(lastUserMsg?.content || '')}`;
+    return new Response(fallback, {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-store',
+      },
+      status: 200,
+    });
+  }
 }
