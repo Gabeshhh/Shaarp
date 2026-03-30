@@ -5,6 +5,7 @@ import { ExhibitorsTable } from '@/components/ExhibitorsTable';
 import { Chat } from '@/components/Chat';
 import { ScrapeProgress } from '@/components/ScrapeProgress';
 import { Exhibitor } from '@/lib/schema';
+import { Sparkles } from 'lucide-react';
 
 interface Message {
   id: string;
@@ -34,12 +35,11 @@ export default function Home() {
       role: 'user',
       content: text,
     };
-    
+
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setIsLoading(true);
 
-    // Detect if message contains URL
     const hasUrl = /https?:\/\/[^\s"'<>]+/i.test(text);
 
     try {
@@ -54,7 +54,6 @@ export default function Home() {
       const isScrapeStream = res.headers.get('X-Scrape-Stream') === 'true';
 
       if (isScrapeStream && hasUrl) {
-        // Handle streaming scrape events
         setExhibitors([]);
         setProgress({ active: true, status: 'Connexion...', current: 0, total: 0, phase: 'connecting' });
 
@@ -63,7 +62,6 @@ export default function Home() {
         let buffer = '';
         const collectedExhibitors: Exhibitor[] = [];
 
-        // Add a status message
         const statusMsg: Message = {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
@@ -75,7 +73,7 @@ export default function Home() {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            
+
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
@@ -84,16 +82,15 @@ export default function Home() {
               if (!line.trim()) continue;
               try {
                 const event = JSON.parse(line);
-                
+
                 switch (event.type) {
                   case 'status':
-                    setProgress(prev => ({ 
-                      ...prev, 
+                    setProgress(prev => ({
+                      ...prev,
                       status: event.message || '',
-                      phase: event.message?.includes('Recherche') ? 'collecting' : 
+                      phase: event.message?.includes('Recherche') ? 'collecting' :
                              event.message?.includes('Deep') ? 'scraping' : prev.phase,
                     }));
-                    // Update the assistant message in real time
                     setMessages(prev => {
                       const updated = [...prev];
                       updated[updated.length - 1] = {
@@ -139,7 +136,7 @@ export default function Home() {
                       const updated = [...prev];
                       updated[updated.length - 1] = {
                         ...updated[updated.length - 1],
-                        content: `✅ Extraction terminée ! ${collectedExhibitors.length} exposants récupérés avec les informations détaillées.`,
+                        content: `✅ Extraction terminée — ${collectedExhibitors.length} entreprises récupérées.`,
                       };
                       return updated;
                     });
@@ -164,7 +161,6 @@ export default function Home() {
           }
         }
       } else {
-        // Normal chat response (no URL)
         const reader = res.body?.getReader();
         const decoder = new TextDecoder();
         let assistantContent = '';
@@ -180,10 +176,10 @@ export default function Home() {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            
+
             const chunk = decoder.decode(value, { stream: true });
             assistantContent += chunk;
-            
+
             setMessages(prev => {
               const updated = [...prev];
               updated[updated.length - 1] = {
@@ -211,19 +207,31 @@ export default function Home() {
 
   return (
     <div className="flex h-screen w-full flex-col bg-background text-foreground md:flex-row font-sans">
-      <div className="flex w-full flex-col border-r border-border md:h-full md:w-[400px] lg:w-[450px] overflow-hidden">
-        <div className="flex h-16 items-center border-b px-6 bg-muted/30 shrink-0">
-          <h1 className="text-xl font-bold tracking-tight text-primary">Shaarp Scraper AI</h1>
+      {/* Sidebar */}
+      <div className="flex w-full flex-col md:h-full md:w-[380px] lg:w-[420px] overflow-hidden bg-slate-900 border-r border-slate-800">
+        {/* Header */}
+        <div className="flex h-16 items-center px-5 shrink-0 border-b border-slate-800">
+          <div className="flex items-center gap-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500 shadow-lg shadow-blue-500/30">
+              <Sparkles size={16} className="text-white" />
+            </div>
+            <div>
+              <h1 className="text-sm font-semibold text-white tracking-tight leading-none">Shaarp Scraper</h1>
+              <p className="text-xs text-slate-500 mt-0.5">Intelligence B2B</p>
+            </div>
+          </div>
         </div>
-        <Chat 
-           messages={messages} 
-           sendMessage={sendMessage}
-           isLoading={isLoading} 
+        <Chat
+          messages={messages}
+          sendMessage={sendMessage}
+          isLoading={isLoading}
         />
       </div>
-      <div className="flex flex-1 flex-col overflow-hidden bg-muted/10">
+
+      {/* Main panel */}
+      <div className="flex flex-1 flex-col overflow-hidden">
         {progress.active && (
-          <ScrapeProgress 
+          <ScrapeProgress
             status={progress.status}
             current={progress.current}
             total={progress.total}
