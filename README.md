@@ -1,4 +1,4 @@
-# Shaarp Expo Scraper - Hackathon MVP
+# Shaarp - 48h
 
 Shaarp Expo Scraper est un outil conçu en 48h lors d’un hackathon pour Shaarp.  
 Son objectif est d’automatiser l’extraction des exposants présents sur les sites de salons professionnels à l’aide d’un agent IA.
