@@ -25,6 +25,7 @@ export default function Home() {
     
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
+    setExhibitors([]); // Reset on new scrape
     setIsLoading(true);
 
     try {
@@ -38,14 +39,19 @@ export default function Home() {
 
       // Check for scrape results in custom header
       const scrapeHeader = res.headers.get('X-Scrape-Result');
+      console.log('[Home] Scrape header:', scrapeHeader ? 'received' : 'not found');
+      
       if (scrapeHeader) {
         try {
           const scrapeData = JSON.parse(scrapeHeader);
           if (scrapeData.success && scrapeData.exhibitors?.length > 0) {
+            console.log('[Home] Updating exhibitors table with', scrapeData.exhibitors.length, 'items');
             setExhibitors(scrapeData.exhibitors);
+          } else {
+            console.log('[Home] Scrape failed or returned 0 results:', scrapeData.message);
           }
         } catch (e) {
-          console.warn('Failed to parse scrape header:', e);
+          console.error('[Home] Failed to parse scrape header:', e);
         }
       }
 
