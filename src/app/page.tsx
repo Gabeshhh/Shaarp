@@ -43,15 +43,23 @@ export default function Home() {
       
       if (scrapeHeader) {
         try {
-          const scrapeData = JSON.parse(scrapeHeader);
+          // Decode Base64 safely (handles UTF-8)
+          const binaryString = atob(scrapeHeader);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          const decodedJson = new TextDecoder().decode(bytes);
+          const scrapeData = JSON.parse(decodedJson);
+          
           if (scrapeData.success && scrapeData.exhibitors?.length > 0) {
             console.log('[Home] Updating exhibitors table with', scrapeData.exhibitors.length, 'items');
             setExhibitors(scrapeData.exhibitors);
           } else {
-            console.log('[Home] Scrape failed or returned 0 results:', scrapeData.message);
+            console.log('[Home] Scrape results empty or failed:', scrapeData.message);
           }
         } catch (e) {
-          console.error('[Home] Failed to parse scrape header:', e);
+          console.error('[Home] Failed to decode/parse scrape header:', e);
         }
       }
 

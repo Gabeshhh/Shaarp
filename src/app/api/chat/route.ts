@@ -63,9 +63,10 @@ CONSIGNES :
     // Return the LLM response + the scrape data as custom header
     const response = result.toTextStreamResponse();
     
-    // Add scrape results as a custom header (JSON-encoded)
+    // Add scrape results as a custom header (Base64 encoded to avoid ASCII errors)
     const headers = new Headers(response.headers);
-    headers.set('X-Scrape-Result', JSON.stringify(scrapeResult));
+    const resultBase64 = Buffer.from(JSON.stringify(scrapeResult)).toString('base64');
+    headers.set('X-Scrape-Result', resultBase64);
     headers.set('Access-Control-Expose-Headers', 'X-Scrape-Result'); // Ensure client can see it
     
     return new Response(response.body, {
