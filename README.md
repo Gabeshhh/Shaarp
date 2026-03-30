@@ -16,6 +16,8 @@ Avant de lancer le projet, assurez-vous d’avoir :
 - **Node.js 18 ou supérieur**
 - une **connexion internet active**
 
+---
+
 ### Installer les dépendances
 
 ```
@@ -26,7 +28,10 @@ Installer Chromium pour Playwright
 ```
 npx playwright install chromium
 ```
-Configurer les variables d’environnement
+
+---
+
+### Configurer les variables d’environnement
 
 Créez un fichier local à partir du fichier d’exemple :
 ```
@@ -36,7 +41,10 @@ Ajoutez ensuite votre clé API dans .env.local :
 ```
 OPENAI_API_KEY=your_api_key_here
 ```
-Lancer le projet en local
+
+---
+
+### Lancer le projet en local
 
 Démarrez le serveur de développement avec :
 ```
