@@ -1,8 +1,8 @@
 import { openai } from '@ai-sdk/openai';
 import { streamText } from 'ai';
-import { scrapeExhibitors } from '@/lib/tools/scrapeExhibitors';
+import { scrapeExhibitorsStream, ScrapeProgressEvent } from '@/lib/tools/scrapeExhibitors';
 
-export const maxDuration = 120;
+export const maxDuration = 300; // 5 minutes for deep scraping
 
 // Simple URL detection
 function extractUrl(text: string): string | null {
@@ -30,52 +30,37 @@ export async function POST(req: Request) {
   const lastUserMsg = [...messages].reverse().find((m: any) => m.role === 'user');
   const url = lastUserMsg ? extractUrl(lastUserMsg.content) : null;
 
-  // If URL detected, scrape directly (bypasses broken tool schema serialization)
+  // If URL detected, stream scrape progress
   if (url) {
-    console.log(`[route] URL detected: ${url}, starting scrape...`);
+    console.log(`[route] URL detected: ${url}, starting deep scrape stream...`);
     
-    const scrapeResult = await scrapeExhibitors(url);
-    
-    // Now ask the LLM to write a summary response
-    const summaryMessages = [
-      ...messages,
-      { 
-        role: 'assistant' as const, 
-        content: `RÉSULTAT DE L'ANALYSE DE LA PAGE ${url} :
-        - STATUT : ${scrapeResult.success ? 'SUCCÈS' : 'ERREUR'}
-        - NOMBRE D'EXPOSANTS TROUVÉS : ${scrapeResult.exhibitors?.length || 0}
-        - MESSAGE DÉTAILLÉ : ${scrapeResult.message}` 
-      }
-    ];
-
-    const result = streamText({
-      model: openai.chat('gpt-4o-mini'),
-      messages: summaryMessages,
-      system: `Tu es "Shaarp Expo Scraper", un agent d'extraction B2B. Tu viens de terminer une extraction d'exposants.
-TON RÔLE : Résumer le résultat de l'extraction de manière professionnelle et concise.
-CONSIGNES :
-1. Si des exposants ont été trouvés, annonce le nombre et confirme que la liste est disponible dans le tableau.
-2. Si aucun exposant n'a été trouvé (NOMBRE = 0) mais que le STATUT est SUCCÈS, explique poliment qu'aucun exposant n'a été détecté sur cette page spécifique.
-3. Si le STATUT est ERREUR, rapporte l'erreur technique brièvement sans inventer de causes.
-4. Ne liste jamais les noms d'exposants dans ton texte de résumé.`,
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          for await (const event of scrapeExhibitorsStream(url)) {
+            const line = JSON.stringify(event) + '\n';
+            controller.enqueue(encoder.encode(line));
+          }
+        } catch (error: any) {
+          const errorEvent: ScrapeProgressEvent = { type: 'error', message: error.message };
+          controller.enqueue(encoder.encode(JSON.stringify(errorEvent) + '\n'));
+        } finally {
+          controller.close();
+        }
+      },
     });
 
-    // Return the LLM response + the scrape data as custom header
-    const response = result.toTextStreamResponse();
-    
-    // Add scrape results as a custom header (Base64 encoded to avoid ASCII errors)
-    const headers = new Headers(response.headers);
-    const resultBase64 = Buffer.from(JSON.stringify(scrapeResult)).toString('base64');
-    headers.set('X-Scrape-Result', resultBase64);
-    headers.set('Access-Control-Expose-Headers', 'X-Scrape-Result'); // Ensure client can see it
-    
-    return new Response(response.body, {
-      status: response.status,
-      headers,
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Transfer-Encoding': 'chunked',
+        'X-Scrape-Stream': 'true',
+      },
     });
   }
 
-  // No URL: just chat normally without tools
+  // No URL: just chat normally
   const result = streamText({
     model: openai.chat('gpt-4o-mini'),
     messages,

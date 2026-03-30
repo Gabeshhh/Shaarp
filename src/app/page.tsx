@@ -3,6 +3,7 @@
 import { useState, useCallback } from 'react';
 import { ExhibitorsTable } from '@/components/ExhibitorsTable';
 import { Chat } from '@/components/Chat';
+import { ScrapeProgress } from '@/components/ScrapeProgress';
 import { Exhibitor } from '@/lib/schema';
 
 interface Message {
@@ -11,10 +12,21 @@ interface Message {
   content: string;
 }
 
+interface ProgressState {
+  active: boolean;
+  status: string;
+  current: number;
+  total: number;
+  phase: 'idle' | 'connecting' | 'collecting' | 'scraping' | 'done' | 'error';
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [exhibitors, setExhibitors] = useState<Exhibitor[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [progress, setProgress] = useState<ProgressState>({
+    active: false, status: '', current: 0, total: 0, phase: 'idle',
+  });
 
   const sendMessage = useCallback(async (text: string) => {
     const userMsg: Message = {
@@ -25,8 +37,10 @@ export default function Home() {
     
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
-    setExhibitors([]); // Reset on new scrape
     setIsLoading(true);
+
+    // Detect if message contains URL
+    const hasUrl = /https?:\/\/[^\s"'<>]+/i.test(text);
 
     try {
       const res = await fetch('/api/chat', {
@@ -37,64 +51,153 @@ export default function Home() {
         }),
       });
 
-      // Check for scrape results in custom header
-      const scrapeHeader = res.headers.get('X-Scrape-Result');
-      console.log('[Home] Scrape header:', scrapeHeader ? 'received' : 'not found');
-      
-      if (scrapeHeader) {
-        try {
-          // Decode Base64 safely (handles UTF-8)
-          const binaryString = atob(scrapeHeader);
-          const bytes = new Uint8Array(binaryString.length);
-          for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
+      const isScrapeStream = res.headers.get('X-Scrape-Stream') === 'true';
+
+      if (isScrapeStream && hasUrl) {
+        // Handle streaming scrape events
+        setExhibitors([]);
+        setProgress({ active: true, status: 'Connexion...', current: 0, total: 0, phase: 'connecting' });
+
+        const reader = res.body?.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        const collectedExhibitors: Exhibitor[] = [];
+
+        // Add a status message
+        const statusMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: '🔍 Extraction en cours...',
+        };
+        setMessages(prev => [...prev, statusMsg]);
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              try {
+                const event = JSON.parse(line);
+                
+                switch (event.type) {
+                  case 'status':
+                    setProgress(prev => ({ 
+                      ...prev, 
+                      status: event.message || '',
+                      phase: event.message?.includes('Recherche') ? 'collecting' : 
+                             event.message?.includes('Deep') ? 'scraping' : prev.phase,
+                    }));
+                    // Update the assistant message in real time
+                    setMessages(prev => {
+                      const updated = [...prev];
+                      updated[updated.length - 1] = {
+                        ...updated[updated.length - 1],
+                        content: event.message || '',
+                      };
+                      return updated;
+                    });
+                    break;
+
+                  case 'progress':
+                    setProgress(prev => ({
+                      ...prev,
+                      current: event.current || prev.current,
+                      total: event.total || prev.total,
+                      status: event.message || prev.status,
+                      phase: 'scraping',
+                    }));
+                    break;
+
+                  case 'exhibitor':
+                    if (event.exhibitor) {
+                      collectedExhibitors.push(event.exhibitor);
+                      setExhibitors([...collectedExhibitors]);
+                      setProgress(prev => ({
+                        ...prev,
+                        current: event.current || collectedExhibitors.length,
+                        total: event.total || prev.total,
+                        phase: 'scraping',
+                      }));
+                    }
+                    break;
+
+                  case 'done':
+                    setProgress({
+                      active: false,
+                      status: event.message || 'Terminé',
+                      current: event.total || collectedExhibitors.length,
+                      total: event.total || collectedExhibitors.length,
+                      phase: 'done',
+                    });
+                    setMessages(prev => {
+                      const updated = [...prev];
+                      updated[updated.length - 1] = {
+                        ...updated[updated.length - 1],
+                        content: `✅ Extraction terminée ! ${collectedExhibitors.length} exposants récupérés avec les informations détaillées.`,
+                      };
+                      return updated;
+                    });
+                    break;
+
+                  case 'error':
+                    setProgress(prev => ({ ...prev, active: false, phase: 'error', status: event.message || 'Erreur' }));
+                    setMessages(prev => {
+                      const updated = [...prev];
+                      updated[updated.length - 1] = {
+                        ...updated[updated.length - 1],
+                        content: `❌ ${event.message || 'Une erreur est survenue.'}`,
+                      };
+                      return updated;
+                    });
+                    break;
+                }
+              } catch {
+                // Skip malformed lines
+              }
+            }
           }
-          const decodedJson = new TextDecoder().decode(bytes);
-          const scrapeData = JSON.parse(decodedJson);
-          
-          if (scrapeData.success && scrapeData.exhibitors?.length > 0) {
-            console.log('[Home] Updating exhibitors table with', scrapeData.exhibitors.length, 'items');
-            setExhibitors(scrapeData.exhibitors);
-          } else {
-            console.log('[Home] Scrape results empty or failed:', scrapeData.message);
-          }
-        } catch (e) {
-          console.error('[Home] Failed to decode/parse scrape header:', e);
         }
-      }
+      } else {
+        // Normal chat response (no URL)
+        const reader = res.body?.getReader();
+        const decoder = new TextDecoder();
+        let assistantContent = '';
 
-      // Read the streamed text response
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
-      let assistantContent = '';
+        const assistantMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: '',
+        };
+        setMessages(prev => [...prev, assistantMsg]);
 
-      const assistantMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: '',
-      };
-      setMessages(prev => [...prev, assistantMsg]);
-
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          
-          const chunk = decoder.decode(value, { stream: true });
-          assistantContent += chunk;
-          
-          setMessages(prev => {
-            const updated = [...prev];
-            updated[updated.length - 1] = {
-              ...updated[updated.length - 1],
-              content: assistantContent,
-            };
-            return updated;
-          });
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const chunk = decoder.decode(value, { stream: true });
+            assistantContent += chunk;
+            
+            setMessages(prev => {
+              const updated = [...prev];
+              updated[updated.length - 1] = {
+                ...updated[updated.length - 1],
+                content: assistantContent,
+              };
+              return updated;
+            });
+          }
         }
       }
     } catch (error) {
       console.error('Chat error:', error);
+      setProgress(prev => ({ ...prev, active: false, phase: 'error' }));
       const errorMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
@@ -119,6 +222,14 @@ export default function Home() {
         />
       </div>
       <div className="flex flex-1 flex-col overflow-hidden bg-muted/10">
+        {progress.active && (
+          <ScrapeProgress 
+            status={progress.status}
+            current={progress.current}
+            total={progress.total}
+            phase={progress.phase}
+          />
+        )}
         <ExhibitorsTable exhibitors={exhibitors} />
       </div>
     </div>
