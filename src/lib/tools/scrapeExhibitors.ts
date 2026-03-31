@@ -1,10 +1,90 @@
 import { chromium, Page, BrowserContext } from 'playwright';
 import { generateObject } from 'ai';
-import { openai } from '@ai-sdk/openai';
+import { createOpenAI } from '@ai-sdk/openai';
 import { zodSchema } from 'ai';
 import { extractionProcessSchema, singleExhibitorProcessSchema, Exhibitor } from '../schema';
+import { logger } from '../logger';
+import { findPhoneNumbersInText, parsePhoneNumberWithError } from 'libphonenumber-js';
 
-const randomDelay = (min = 800, max = 1500) => new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min)) + min));
+function normalizeOpenAIProject(rawProject: string | undefined, apiKey: string | undefined): string | undefined {
+  if (!rawProject) return undefined;
+  const project = rawProject.trim();
+  if (!project || project === apiKey) return undefined;
+  if (project.startsWith('sk-')) return undefined;
+  return project;
+}
+
+const openAIKey = process.env.OPENAI_API_KEY?.trim();
+const openAIProject = normalizeOpenAIProject(process.env.OPENAI_PROJECT?.trim(), openAIKey);
+const openaiClient = createOpenAI({ apiKey: openAIKey, project: openAIProject });
+
+const randomDelay = (min = 2500, max = 3500) => new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min)) + min));
+
+function uniq(values: string[]) {
+  return Array.from(new Set(values.map(v => v.trim()).filter(Boolean)));
+}
+
+function extractEmails(text: string) {
+  const matches = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) ?? [];
+  return uniq(matches);
+}
+
+// Normalize a raw phone string to international format (e.g. "+852 2766 9787")
+// Returns null if the string is not a valid phone number
+function normalizePhone(raw: string): string | null {
+  try {
+    const parsed = parsePhoneNumberWithError(raw);
+    return parsed.isValid() ? parsed.formatInternational() : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractPhones(text: string) {
+  // libphonenumber-js valide les numéros de téléphone réels (rejette fragments, dates, codes produits...)
+  const found = findPhoneNumbersInText(text);
+  if (found.length > 0) {
+    return uniq(found.map(p => p.number.formatInternational()));
+  }
+  // Fallback regex si libphonenumber ne trouve rien : uniquement formats +CC ou 00CC
+  const matches = text.match(/(?:\+|00)\d{1,3}[\s\-.]?\(?\d{1,4}\)?[\s\-.]?\d{2,4}[\s\-.]?\d{2,4}(?:[\s\-.]?\d{1,4})?/g) ?? [];
+  return uniq(
+    matches
+      .map(m => normalizePhone(m.trim()) ?? m.replace(/\s+/g, ' ').trim())
+      .filter(m => {
+        const digits = m.replace(/[^\d]/g, '');
+        return digits.length >= 8 && digits.length <= 15;
+      })
+  );
+}
+
+// Known media/platform domains that appear on event pages but are NOT company websites
+const EXCLUDED_DOMAINS = new Set([
+  'twitter.com', 'x.com', 'linkedin.com', 'facebook.com', 'instagram.com',
+  'youtube.com', 'ft.com', 'bloomberg.com', 'reuters.com', 'techcrunch.com',
+  'forbes.com', 'wired.com', 'theverge.com', 'gsma.com', 'qt.eu',
+  'google.com', 'apple.com', 'microsoft.com', 'wikipedia.org',
+]);
+
+function isProbablyWebsite(href: string) {
+  try {
+    const u = new URL(href);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    const host = u.hostname.toLowerCase().replace(/^www\./, '');
+    if (!host || host === 'localhost') return false;
+    if (EXCLUDED_DOMAINS.has(host)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function pickBestWebsite(urls: string[]) {
+  const clean = uniq(urls).filter(isProbablyWebsite);
+  if (clean.length === 0) return '';
+  // Préfère une URL courte (souvent domaine principal)
+  return clean.sort((a, b) => a.length - b.length)[0];
+}
 
 async function autoScroll(page: Page) {
   await page.evaluate(async () => {
@@ -47,40 +127,50 @@ async function collectExhibitorLinks(
     const { links, names } = await page.evaluate((base: string) => {
       const anchors = Array.from(document.querySelectorAll('a[href]'));
       const result: { links: string[]; names: string[] } = { links: [], names: [] };
+      const origin = new URL(base).origin;
+      // Depth of the input URL (e.g. /exhibitors = depth 1, /fr/exhibitors = depth 2)
+      const basePathDepth = base.replace(origin, '').split('/').filter(Boolean).length;
 
       for (const a of anchors) {
         const href = (a as HTMLAnchorElement).href;
         const text = (a as HTMLElement).innerText?.trim();
 
-        // Heuristic: exhibitor detail pages typically contain "exhibitor" or "exposant" in URL
-        // Or they are links inside a list/grid with short text (company names)
-        if (
-          href &&
-          text &&
-          text.length > 1 &&
-          text.length < 150 &&
-          !href.includes('#') &&
-          !href.includes('javascript:') &&
-          (
-            href.includes('/exhibitor') ||
-            href.includes('/exposant') ||
-            href.includes('/company') ||
-            href.includes('/sponsor') ||
-            // Generic: same domain, looks like a detail page
-            (href.startsWith(new URL(base).origin) && href.split('/').length > 4)
-          )
-        ) {
-          result.links.push(href);
-          result.names.push(text);
-        }
+        if (!href || !text || text.length <= 1 || text.length >= 150) continue;
+        if (href.includes('#') || href.includes('javascript:')) continue;
+
+        // Must be same domain — avoids picking up linkedin, ft.com, etc.
+        if (!href.startsWith(origin)) continue;
+
+        // Must contain a numeric ID (exhibitor profiles always have one, nav items don't)
+        if (!/\/\d{3,}/.test(href)) continue;
+
+        // Must be exactly 1 level deeper than the base URL
+        // e.g. base=/exhibitors (depth 1) → allow /exhibitors/33647-company (depth 2)
+        // Rejects sub-product pages like /exhibitors/33647-company/data-centres (depth 3)
+        const hrefDepth = href.replace(origin, '').split('/').filter(Boolean).length;
+        if (hrefDepth !== basePathDepth + 1) continue;
+
+        result.links.push(href);
+        result.names.push(text);
       }
       return result;
     }, baseUrl);
 
-    for (const link of links) {
-      allLinks.add(link);
+    // Deduplicate by numeric ID — keep the shortest URL for each ID
+    // (same company can appear with different anchor texts on the listing page)
+    const idMap = new Map<string, { link: string; name: string }>();
+    for (let i = 0; i < links.length; i++) {
+      const idMatch = links[i].match(/\/(\d{3,})/);
+      if (idMatch) {
+        const id = idMatch[1];
+        if (!idMap.has(id) || links[i].length < idMap.get(id)!.link.length) {
+          idMap.set(id, { link: links[i], name: names[i] || `Exposant ${id}` });
+        }
+      }
     }
-    for (const name of names) {
+
+    for (const { link, name } of idMap.values()) {
+      allLinks.add(link);
       if (!allNames.includes(name)) allNames.push(name);
     }
 
@@ -136,34 +226,92 @@ async function scrapeExhibitorDetail(
   fallbackName: string
 ): Promise<Exhibitor | null> {
   const page = await context.newPage();
+  let fallbackEmails: string[] = [];
+  let fallbackPhones: string[] = [];
+  let fallbackWebsite = url;
+
   try {
     await page.goto(url, { waitUntil: 'networkidle', timeout: 20000 });
     await randomDelay(500, 1000);
 
-    const pageText = await page.evaluate(() => {
+    const { pageText, mailtos, tels, hrefs } = await page.evaluate(() => {
       document.querySelectorAll('script, style, noscript, svg, iframe').forEach(el => el.remove());
       const main = document.querySelector('main') || document.querySelector('#content') || document.querySelector('article') || document.body;
-      return main.innerText.substring(0, 30000);
+      const anchors = Array.from(document.querySelectorAll('a[href]')) as HTMLAnchorElement[];
+      const hrefList = anchors.map(a => a.href).filter(Boolean);
+      const mailtoList = hrefList
+        .filter(h => h.startsWith('mailto:'))
+        .map(h => h.replace(/^mailto:/i, '').split('?')[0]);
+      const telList = hrefList
+        .filter(h => h.startsWith('tel:'))
+        .map(h => h.replace(/^tel:/i, ''));
+      return {
+        pageText: main.innerText.substring(0, 30000),
+        mailtos: mailtoList,
+        tels: telList,
+        hrefs: hrefList,
+      };
     });
 
     if (!pageText || pageText.trim().length < 50) {
       return { name: fallbackName, website: '', booth: '', linkedin: '', twitter: '', email: '', phone: '' };
     }
 
+    fallbackEmails = uniq([...mailtos, ...extractEmails(pageText)]);
+    // Normalize tel: links to international format before merging with text-extracted numbers
+    // This prevents duplicates like "+852 27669787" vs "+85227669787"
+    const normalizedTels = tels.map(t => normalizePhone(t) ?? t);
+    fallbackPhones = uniq([...normalizedTels, ...extractPhones(pageText)]);
+    fallbackWebsite = pickBestWebsite(hrefs) || url;
+    const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
+
+    // Fallback “sans LLM”: extraction regex + mailto/tel + liens externes
+    if (!hasOpenAIKey) {
+      return {
+        name: fallbackName,
+        website: fallbackWebsite,
+        booth: '',
+        linkedin: '',
+        twitter: '',
+        email: fallbackEmails.join('; '),
+        phone: fallbackPhones.join('; '),
+      };
+    }
+
+    const openAIKey = process.env.OPENAI_API_KEY?.trim();
+    const openAIProject = normalizeOpenAIProject(process.env.OPENAI_PROJECT?.trim(), openAIKey);
+    const openaiClient = createOpenAI({ apiKey: openAIKey, project: openAIProject });
+
     const { object } = await generateObject({
-      model: openai.chat('gpt-4o-mini'),
+      model: openaiClient.chat('gpt-4o-mini'),
       schema: zodSchema(singleExhibitorProcessSchema),
-      prompt: `Voici le contenu d'une fiche exposant. TA MISSION : Extraire UNIQUEMENT les COORDONNÉES DE CONTACT (email, téléphone, site web, booth, réseaux sociaux). 
+      prompt: `Voici le contenu d'une fiche exposant. TA MISSION : Extraire UNIQUEMENT les COORDONNÉES DE CONTACT (email, téléphone, site web, booth, réseaux sociaux).
 
 IMPORTANT : Ne perds pas de temps avec les descriptions, l'historique de l'entreprise ou les présentations marketing. Ignore tout ce qui n'est pas un contact direct.
 
 Utilise "${fallbackName}" si le nom n'est pas clair. Contenu :\n\n${pageText}`,
     });
 
-    return object.exhibitor;
+    return {
+      name: object.exhibitor.name || fallbackName,
+      website: object.exhibitor.website || fallbackWebsite,
+      booth: object.exhibitor.booth || '',
+      linkedin: object.exhibitor.linkedin || '',
+      twitter: object.exhibitor.twitter || '',
+      email: object.exhibitor.email?.trim() || fallbackEmails.join('; '),
+      phone: object.exhibitor.phone?.trim() || fallbackPhones.join('; '),
+    };
   } catch (error: any) {
-    console.warn(`[detail] Erreur sur ${url}: ${error.message}`);
-    return { name: fallbackName, website: url, booth: '', linkedin: '', twitter: '', email: '', phone: '' };
+    logger.warn('scraper/detail', 'Erreur page exposant, fallback regex', { url, error: error.message });
+    return {
+      name: fallbackName,
+      website: fallbackWebsite,
+      booth: '',
+      linkedin: '',
+      twitter: '',
+      email: fallbackEmails.join('; '),
+      phone: fallbackPhones.join('; '),
+    };
   } finally {
     await page.close();
   }
@@ -181,8 +329,9 @@ export interface ScrapeProgressEvent {
 }
 
 export async function* scrapeExhibitorsStream(url: string): AsyncGenerator<ScrapeProgressEvent> {
+  logger.info('scraper', 'Démarrage scraping', { url });
   yield { type: 'status', message: `🚀 Lancement du navigateur...` };
-  
+
   const browser = await chromium.launch({ headless: true });
 
   try {
@@ -210,9 +359,12 @@ export async function* scrapeExhibitorsStream(url: string): AsyncGenerator<Scrap
       yield { type: 'status', message: msg };
     }
 
+    logger.info('scraper', 'Liens collectés', { count: links.length, url });
+
     // If we found exhibitor links, do deep scraping
     if (links.length > 0) {
       const total = Math.min(links.length, 200); // Safety cap at 200
+      logger.info('scraper', 'Démarrage deep scraping', { total, url });
       yield { type: 'status', message: `🔬 Deep scraping de ${total} fiches exposants...` };
 
       // Process in batches of 3 for parallelism
@@ -245,41 +397,107 @@ export async function* scrapeExhibitorsStream(url: string): AsyncGenerator<Scrap
         await randomDelay(300, 600);
       }
 
+      logger.info('scraper', 'Deep scraping terminé', { processed, url });
       yield { type: 'done', total: processed, message: `✅ Extraction terminée ! ${processed} exposants traités.` };
 
     } else {
       // Fallback: no detail links found, use LLM on the listing page text
       yield { type: 'status', message: `⚡ Aucun lien de détail trouvé. Extraction directe depuis la liste...` };
 
-      const pageData = await page.evaluate(() => {
+      const { pageTitle, pageUrl, pageData, hrefs } = await page.evaluate(() => {
         document.querySelectorAll('script, style, noscript, svg, iframe').forEach(el => el.remove());
         const main = document.querySelector('main') || document.querySelector('#content') || document.body;
-        return main.innerText.substring(0, 150000);
+        const anchors = Array.from(document.querySelectorAll('a[href]')) as HTMLAnchorElement[];
+        const hrefList = anchors.map(a => a.href).filter(Boolean);
+        return {
+          pageTitle: document.title || '',
+          pageUrl: window.location.href || '',
+          pageData: main.innerText.substring(0, 150000),
+          hrefs: hrefList,
+        };
       });
 
-      const { object } = await generateObject({
-        model: openai.chat('gpt-4o-mini'),
-        schema: zodSchema(extractionProcessSchema),
-        prompt: `Voici le contenu d'un site de salon professionnel. 
-TA MISSION : Extraire TOUS les exposants avec UNIQUEMENT leurs COORDONNÉES DE CONTACT (email, téléphone, site web, stand/booth, réseaux sociaux). 
+      if (!pageData || pageData.trim().length < 50) {
+        yield { type: 'error', message: '❌ Impossible d’extraire le contenu de la page de liste.' };
+        return;
+      }
 
-IMPORTANT : Ignore totalement les descriptions, les slogans ou les présentations d'activités. Ne remplis que les champs de contact.`,
-      });
+      const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
+      const fallbackEmails = uniq([
+        ...extractEmails(pageData),
+        ...hrefs
+          .filter(h => h.startsWith('mailto:'))
+          .map(h => h.replace(/^mailto:/i, '').split('?')[0]),
+      ]);
+      const fallbackPhones = uniq([
+        ...extractPhones(pageData),
+        ...hrefs
+          .filter(h => h.startsWith('tel:'))
+          .map(h => h.replace(/^tel:/i, '')),
+      ]);
+      const fallbackWebsite = pickBestWebsite(hrefs) || url;
 
-      for (let i = 0; i < object.exhibitors.length; i++) {
+      if (!hasOpenAIKey) {
         yield {
           type: 'exhibitor',
-          exhibitor: object.exhibitors[i],
+          exhibitor: {
+            name: pageTitle || 'Liste exposants',
+            website: fallbackWebsite,
+            booth: '',
+            linkedin: '',
+            twitter: '',
+            email: fallbackEmails.join('; '),
+            phone: fallbackPhones.join('; '),
+          },
+          current: 1,
+          total: 1,
+        };
+        yield { type: 'done', total: 1, message: `✅ Extraction terminée (mode sans OpenAI).` };
+        return;
+      }
+
+      const { object } = await generateObject({
+        model: openaiClient.chat('gpt-4o-mini'),
+        schema: zodSchema(extractionProcessSchema),
+        prompt: `Voici le contenu d'un site de salon professionnel.
+TA MISSION : Extraire TOUS les exposants avec UNIQUEMENT leurs COORDONNÉES DE CONTACT (email, téléphone, site web, stand/booth, réseaux sociaux).
+
+INSTRUCTIONS IMPORTANTES :
+- RÉPONDS UNIQUEMENT avec un JSON strict correspondant au schéma fourni.
+- Renvoie un objet { "exhibitors": [ ... ] } avec les champs exacts : name, website, booth, email, phone, linkedin, twitter.
+- Si un champ n'existe pas, renvoie une chaîne vide.
+- Ne fournis aucun texte explicatif, aucun commentaire, ni aucune mise en forme additionnelle.
+
+Titre de la page : ${pageTitle}
+URL : ${pageUrl}
+
+Contenu de la page :\n\n${pageData}`,
+      });
+
+      const mergedExhibitors = object.exhibitors.map((ex) => ({
+        name: ex.name || pageTitle || 'Liste exposants',
+        website: ex.website || fallbackWebsite,
+        booth: ex.booth || '',
+        linkedin: ex.linkedin || '',
+        twitter: ex.twitter || '',
+        email: ex.email?.trim() || fallbackEmails.join('; '),
+        phone: ex.phone?.trim() || fallbackPhones.join('; '),
+      }));
+
+      for (let i = 0; i < mergedExhibitors.length; i++) {
+        yield {
+          type: 'exhibitor',
+          exhibitor: mergedExhibitors[i],
           current: i + 1,
-          total: object.exhibitors.length,
+          total: mergedExhibitors.length,
         };
       }
 
-      yield { type: 'done', total: object.exhibitors.length, message: `✅ Extraction terminée ! ${object.exhibitors.length} exposants trouvés.` };
+      yield { type: 'done', total: mergedExhibitors.length, message: `✅ Extraction terminée ! ${mergedExhibitors.length} exposants trouvés.` };
     }
 
   } catch (error: any) {
-    console.error("[scrapeExhibitors] Erreur critique:", error.message);
+    logger.error('scraper', 'Erreur critique', { url, error: error.message });
     yield { type: 'error', message: `❌ Erreur: ${error.message}` };
   } finally {
     await browser.close();

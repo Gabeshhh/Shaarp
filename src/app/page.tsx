@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react';
 import { ExhibitorsTable } from '@/components/ExhibitorsTable';
 import { Chat } from '@/components/Chat';
 import { ScrapeProgress } from '@/components/ScrapeProgress';
+import { ContactsPanel } from '@/components/ContactsPanel';
 import { Exhibitor } from '@/lib/schema';
 import { Sparkles } from 'lucide-react';
 
@@ -21,13 +22,24 @@ interface ProgressState {
   phase: 'idle' | 'connecting' | 'collecting' | 'scraping' | 'done' | 'error';
 }
 
+export interface LogEntry {
+  ts: string;
+  type: string;
+  message: string;
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [exhibitors, setExhibitors] = useState<Exhibitor[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [progress, setProgress] = useState<ProgressState>({
     active: false, status: '', current: 0, total: 0, phase: 'idle',
   });
+
+  const addLog = useCallback((type: string, message: string) => {
+    setLogs(prev => [...prev, { ts: new Date().toISOString(), type, message }]);
+  }, []);
 
   const sendMessage = useCallback(async (text: string) => {
     const userMsg: Message = {
@@ -51,10 +63,14 @@ export default function Home() {
         }),
       });
 
-      const isScrapeStream = res.headers.get('X-Scrape-Stream') === 'true';
+      const contentType = (res.headers.get('content-type') || '').toLowerCase();
+      const isNdjson = contentType.includes('application/x-ndjson');
+      const isScrapeStream = res.headers.get('X-Scrape-Stream') === 'true' || isNdjson;
 
       if (isScrapeStream && hasUrl) {
         setExhibitors([]);
+        setLogs([]);
+        addLog('info', `Démarrage scraping — URL: ${text}`);
         setProgress({ active: true, status: 'Connexion...', current: 0, total: 0, phase: 'connecting' });
 
         const reader = res.body?.getReader();
@@ -85,6 +101,7 @@ export default function Home() {
 
                 switch (event.type) {
                   case 'status':
+                    addLog('status', event.message || '');
                     setProgress(prev => ({
                       ...prev,
                       status: event.message || '',
@@ -102,6 +119,7 @@ export default function Home() {
                     break;
 
                   case 'progress':
+                    addLog('progress', event.message || `${event.current}/${event.total}`);
                     setProgress(prev => ({
                       ...prev,
                       current: event.current || prev.current,
@@ -113,6 +131,7 @@ export default function Home() {
 
                   case 'exhibitor':
                     if (event.exhibitor) {
+                      addLog('exhibitor', `Exposant extrait: ${event.exhibitor.name}`);
                       collectedExhibitors.push(event.exhibitor);
                       setExhibitors([...collectedExhibitors]);
                       setProgress(prev => ({
@@ -125,6 +144,7 @@ export default function Home() {
                     break;
 
                   case 'done':
+                    addLog('done', event.message || `Terminé — ${collectedExhibitors.length} exposants`);
                     setProgress({
                       active: false,
                       status: event.message || 'Terminé',
@@ -143,6 +163,7 @@ export default function Home() {
                     break;
 
                   case 'error':
+                    addLog('error', event.message || 'Erreur inconnue');
                     setProgress(prev => ({ ...prev, active: false, phase: 'error', status: event.message || 'Erreur' }));
                     setMessages(prev => {
                       const updated = [...prev];
@@ -161,6 +182,31 @@ export default function Home() {
           }
         }
       } else {
+        const isHtml = contentType.includes('text/html');
+        if (!res.ok) {
+          const raw = await res.text().catch(() => '');
+          const msg = raw && !isHtml ? raw : 'Erreur serveur (réponse non exploitable).';
+          const errorMsg: Message = {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            content: `❌ ${msg}`,
+          };
+          setMessages(prev => [...prev, errorMsg]);
+          setProgress({ active: false, status: `Erreur HTTP ${res.status}`, current: 0, total: 0, phase: 'error' });
+          return;
+        }
+
+        if (hasUrl && !isScrapeStream && isHtml) {
+          const errorMsg: Message = {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            content: '❌ Erreur : la réponse du serveur est invalide. Vérifiez que l’API de scraping est bien activée.',
+          };
+          setMessages(prev => [...prev, errorMsg]);
+          setProgress({ active: false, status: 'Réponse HTML inattendue', current: 0, total: 0, phase: 'error' });
+          return;
+        }
+
         const reader = res.body?.getReader();
         const decoder = new TextDecoder();
         let assistantContent = '';
@@ -177,8 +223,8 @@ export default function Home() {
             const { done, value } = await reader.read();
             if (done) break;
 
-            const chunk = decoder.decode(value, { stream: true });
-            assistantContent += chunk;
+const chunk = decoder.decode(value, { stream: true });
+assistantContent += chunk;
 
             setMessages(prev => {
               const updated = [...prev];
@@ -206,39 +252,46 @@ export default function Home() {
   }, [messages]);
 
   return (
-    <div className="flex h-screen w-full flex-col bg-background text-foreground md:flex-row font-sans">
-      {/* Sidebar */}
-      <div className="flex w-full flex-col md:h-full md:w-[380px] lg:w-[420px] overflow-hidden bg-slate-900 border-r border-slate-800">
-        {/* Header */}
-        <div className="flex h-16 items-center px-5 shrink-0 border-b border-slate-800">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500 shadow-lg shadow-blue-500/30">
-              <Sparkles size={16} className="text-white" />
-            </div>
-            <div>
-              <h1 className="text-sm font-semibold text-white tracking-tight leading-none">Shaarp Scraper</h1>
-              <p className="text-xs text-slate-500 mt-0.5">Intelligence B2B</p>
+    <div className="flex h-screen w-full flex-col bg-background text-foreground font-sans overflow-hidden">
+      {progress.active && (
+        <ScrapeProgress
+          status={progress.status}
+          current={progress.current}
+          total={progress.total}
+          phase={progress.phase}
+        />
+      )}
+
+      <div className="flex flex-1 overflow-y-auto overflow-x-hidden flex-col lg:flex-row">
+        {/* Tableau à gauche */}
+        <div className="flex-1 overflow-hidden order-1">
+          <ExhibitorsTable exhibitors={exhibitors} logs={logs} />
+        </div>
+
+        {/* Contacts au milieu */}
+        <div className="order-2">
+          <ContactsPanel exhibitors={exhibitors} />
+        </div>
+
+        {/* Chat complètement à droite */}
+        <div className="flex w-full flex-col h-full overflow-hidden bg-slate-900 border-l border-slate-800 order-3 lg:w-[380px] xl:w-[420px]">
+          <div className="flex h-16 items-center px-5 shrink-0 border-b border-slate-800">
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500 shadow-lg shadow-blue-500/30">
+                <Sparkles size={16} className="text-white" />
+              </div>
+              <div>
+                <h1 className="text-sm font-semibold text-white tracking-tight leading-none">Shaarp Scraper</h1>
+                <p className="text-xs text-slate-500 mt-0.5">Intelligence B2B</p>
+              </div>
             </div>
           </div>
-        </div>
-        <Chat
-          messages={messages}
-          sendMessage={sendMessage}
-          isLoading={isLoading}
-        />
-      </div>
-
-      {/* Main panel */}
-      <div className="flex flex-1 flex-col overflow-hidden">
-        {progress.active && (
-          <ScrapeProgress
-            status={progress.status}
-            current={progress.current}
-            total={progress.total}
-            phase={progress.phase}
+          <Chat
+            messages={messages}
+            sendMessage={sendMessage}
+            isLoading={isLoading}
           />
-        )}
-        <ExhibitorsTable exhibitors={exhibitors} />
+        </div>
       </div>
     </div>
   );
