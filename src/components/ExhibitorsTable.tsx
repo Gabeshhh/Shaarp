@@ -10,11 +10,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Download, Search, Globe, Mail, Phone, Building2, Users } from 'lucide-react';
+import { Download, Search, Globe, Mail, Phone, Building2, Users, ScrollText } from 'lucide-react';
 import Papa from 'papaparse';
+import type { LogEntry } from '@/app/page';
 
 interface ExhibitorsTableProps {
   exhibitors: Exhibitor[];
+  logs: LogEntry[];
 }
 
 const AVATAR_COLORS = [
@@ -36,7 +38,7 @@ function CompanyAvatar({ name }: { name: string }) {
   );
 }
 
-export function ExhibitorsTable({ exhibitors }: ExhibitorsTableProps) {
+export function ExhibitorsTable({ exhibitors, logs }: ExhibitorsTableProps) {
   const [search, setSearch] = useState('');
 
   const filteredExhibitors = exhibitors.filter(e =>
@@ -45,6 +47,18 @@ export function ExhibitorsTable({ exhibitors }: ExhibitorsTableProps) {
 
   const withEmail = exhibitors.filter(e => e.email && e.email !== '').length;
   const withPhone = exhibitors.filter(e => e.phone && e.phone !== '').length;
+
+  const handleExportLogs = () => {
+    const lines = logs.map(e => `[${e.ts}] [${e.type.toUpperCase().padEnd(8)}] ${e.message}`).join('\n');
+    const blob = new Blob([lines], { type: 'text/plain;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `shaarp_logs_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const handleExport = () => {
     const formattedData = filteredExhibitors.map(e => ({
@@ -127,6 +141,12 @@ export function ExhibitorsTable({ exhibitors }: ExhibitorsTableProps) {
               className="w-full pl-8 h-8 text-xs bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-400"
             />
           </div>
+          {logs.length > 0 && (
+            <Button onClick={handleExportLogs} size="sm" variant="outline" className="h-8 gap-1.5 text-xs shrink-0 border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700">
+              <ScrollText size={13} />
+              <span className="hidden sm:inline">Logs</span>
+            </Button>
+          )}
           <Button onClick={handleExport} size="sm" className="h-8 gap-1.5 text-xs shrink-0">
             <Download size={13} />
             <span className="hidden sm:inline">Export CSV</span>

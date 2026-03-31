@@ -22,13 +22,24 @@ interface ProgressState {
   phase: 'idle' | 'connecting' | 'collecting' | 'scraping' | 'done' | 'error';
 }
 
+export interface LogEntry {
+  ts: string;
+  type: string;
+  message: string;
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [exhibitors, setExhibitors] = useState<Exhibitor[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [progress, setProgress] = useState<ProgressState>({
     active: false, status: '', current: 0, total: 0, phase: 'idle',
   });
+
+  const addLog = useCallback((type: string, message: string) => {
+    setLogs(prev => [...prev, { ts: new Date().toISOString(), type, message }]);
+  }, []);
 
   const sendMessage = useCallback(async (text: string) => {
     const userMsg: Message = {
@@ -58,6 +69,8 @@ export default function Home() {
 
       if (isScrapeStream && hasUrl) {
         setExhibitors([]);
+        setLogs([]);
+        addLog('info', `Démarrage scraping — URL: ${text}`);
         setProgress({ active: true, status: 'Connexion...', current: 0, total: 0, phase: 'connecting' });
 
         const reader = res.body?.getReader();
@@ -88,6 +101,7 @@ export default function Home() {
 
                 switch (event.type) {
                   case 'status':
+                    addLog('status', event.message || '');
                     setProgress(prev => ({
                       ...prev,
                       status: event.message || '',
@@ -105,6 +119,7 @@ export default function Home() {
                     break;
 
                   case 'progress':
+                    addLog('progress', event.message || `${event.current}/${event.total}`);
                     setProgress(prev => ({
                       ...prev,
                       current: event.current || prev.current,
@@ -116,6 +131,7 @@ export default function Home() {
 
                   case 'exhibitor':
                     if (event.exhibitor) {
+                      addLog('exhibitor', `Exposant extrait: ${event.exhibitor.name}`);
                       collectedExhibitors.push(event.exhibitor);
                       setExhibitors([...collectedExhibitors]);
                       setProgress(prev => ({
@@ -128,6 +144,7 @@ export default function Home() {
                     break;
 
                   case 'done':
+                    addLog('done', event.message || `Terminé — ${collectedExhibitors.length} exposants`);
                     setProgress({
                       active: false,
                       status: event.message || 'Terminé',
@@ -146,6 +163,7 @@ export default function Home() {
                     break;
 
                   case 'error':
+                    addLog('error', event.message || 'Erreur inconnue');
                     setProgress(prev => ({ ...prev, active: false, phase: 'error', status: event.message || 'Erreur' }));
                     setMessages(prev => {
                       const updated = [...prev];
@@ -247,7 +265,7 @@ assistantContent += chunk;
       <div className="flex flex-1 overflow-y-auto overflow-x-hidden flex-col lg:flex-row">
         {/* Tableau à gauche */}
         <div className="flex-1 overflow-hidden order-1">
-          <ExhibitorsTable exhibitors={exhibitors} />
+          <ExhibitorsTable exhibitors={exhibitors} logs={logs} />
         </div>
 
         {/* Contacts au milieu */}
