@@ -4,7 +4,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { zodSchema } from 'ai';
 import { extractionProcessSchema, singleExhibitorProcessSchema, Exhibitor } from '../schema';
 import { logger } from '../logger';
-import { findPhoneNumbersInText } from 'libphonenumber-js';
+import { findPhoneNumbersInText, parsePhoneNumberWithError } from 'libphonenumber-js';
 
 function normalizeOpenAIProject(rawProject: string | undefined, apiKey: string | undefined): string | undefined {
   if (!rawProject) return undefined;
@@ -29,17 +29,28 @@ function extractEmails(text: string) {
   return uniq(matches);
 }
 
+// Normalize a raw phone string to international format (e.g. "+852 2766 9787")
+// Returns null if the string is not a valid phone number
+function normalizePhone(raw: string): string | null {
+  try {
+    const parsed = parsePhoneNumberWithError(raw);
+    return parsed.isValid() ? parsed.formatInternational() : null;
+  } catch {
+    return null;
+  }
+}
+
 function extractPhones(text: string) {
   // libphonenumber-js valide les numéros de téléphone réels (rejette fragments, dates, codes produits...)
   const found = findPhoneNumbersInText(text);
   if (found.length > 0) {
-    return uniq(found.map(p => p.number.number as string));
+    return uniq(found.map(p => p.number.formatInternational()));
   }
   // Fallback regex si libphonenumber ne trouve rien : uniquement formats +CC ou 00CC
   const matches = text.match(/(?:\+|00)\d{1,3}[\s\-.]?\(?\d{1,4}\)?[\s\-.]?\d{2,4}[\s\-.]?\d{2,4}(?:[\s\-.]?\d{1,4})?/g) ?? [];
   return uniq(
     matches
-      .map(m => m.replace(/\s+/g, ' ').trim())
+      .map(m => normalizePhone(m.trim()) ?? m.replace(/\s+/g, ' ').trim())
       .filter(m => {
         const digits = m.replace(/[^\d]/g, '');
         return digits.length >= 8 && digits.length <= 15;
@@ -247,7 +258,10 @@ async function scrapeExhibitorDetail(
     }
 
     fallbackEmails = uniq([...mailtos, ...extractEmails(pageText)]);
-    fallbackPhones = uniq([...tels, ...extractPhones(pageText)]);
+    // Normalize tel: links to international format before merging with text-extracted numbers
+    // This prevents duplicates like "+852 27669787" vs "+85227669787"
+    const normalizedTels = tels.map(t => normalizePhone(t) ?? t);
+    fallbackPhones = uniq([...normalizedTels, ...extractPhones(pageText)]);
     fallbackWebsite = pickBestWebsite(hrefs) || url;
     const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
 
