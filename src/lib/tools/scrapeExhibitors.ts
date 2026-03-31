@@ -3,6 +3,7 @@ import { generateObject } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { zodSchema } from 'ai';
 import { extractionProcessSchema, singleExhibitorProcessSchema, Exhibitor } from '../schema';
+import { logger } from '../logger';
 
 function normalizeOpenAIProject(rawProject: string | undefined, apiKey: string | undefined): string | undefined {
   if (!rawProject) return undefined;
@@ -259,7 +260,7 @@ Utilise "${fallbackName}" si le nom n'est pas clair. Contenu :\n\n${pageText}`,
       phone: object.exhibitor.phone?.trim() || fallbackPhones.join('; '),
     };
   } catch (error: any) {
-    console.warn(`[detail] Erreur sur ${url}: ${error.message}. Utilisation du fallback local.`);
+    logger.warn('scraper/detail', 'Erreur page exposant, fallback regex', { url, error: error.message });
     return {
       name: fallbackName,
       website: fallbackWebsite,
@@ -286,8 +287,9 @@ export interface ScrapeProgressEvent {
 }
 
 export async function* scrapeExhibitorsStream(url: string): AsyncGenerator<ScrapeProgressEvent> {
+  logger.info('scraper', 'Démarrage scraping', { url });
   yield { type: 'status', message: `🚀 Lancement du navigateur...` };
-  
+
   const browser = await chromium.launch({ headless: true });
 
   try {
@@ -315,9 +317,12 @@ export async function* scrapeExhibitorsStream(url: string): AsyncGenerator<Scrap
       yield { type: 'status', message: msg };
     }
 
+    logger.info('scraper', 'Liens collectés', { count: links.length, url });
+
     // If we found exhibitor links, do deep scraping
     if (links.length > 0) {
       const total = Math.min(links.length, 200); // Safety cap at 200
+      logger.info('scraper', 'Démarrage deep scraping', { total, url });
       yield { type: 'status', message: `🔬 Deep scraping de ${total} fiches exposants...` };
 
       // Process in batches of 3 for parallelism
@@ -350,6 +355,7 @@ export async function* scrapeExhibitorsStream(url: string): AsyncGenerator<Scrap
         await randomDelay(300, 600);
       }
 
+      logger.info('scraper', 'Deep scraping terminé', { processed, url });
       yield { type: 'done', total: processed, message: `✅ Extraction terminée ! ${processed} exposants traités.` };
 
     } else {
@@ -449,7 +455,7 @@ Contenu de la page :\n\n${pageData}`,
     }
 
   } catch (error: any) {
-    console.error("[scrapeExhibitors] Erreur critique:", error.message);
+    logger.error('scraper', 'Erreur critique', { url, error: error.message });
     yield { type: 'error', message: `❌ Erreur: ${error.message}` };
   } finally {
     await browser.close();

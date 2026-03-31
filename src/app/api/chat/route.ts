@@ -1,6 +1,7 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 import { scrapeExhibitorsStream, ScrapeProgressEvent } from '@/lib/tools/scrapeExhibitors';
+import { logger } from '@/lib/logger';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -48,6 +49,8 @@ export async function POST(req: Request) {
   const lastUserMsg = [...messages].reverse().find((m: any) => m.role === 'user');
   const url = lastUserMsg ? extractUrl(lastUserMsg.content) : null;
 
+  logger.info('route/chat', 'Requête reçue', { mode: url ? 'scraping' : 'chatbot', url: url ?? undefined });
+
   if (lastUserMsg?.content && /^(stp|svp|s['’]?il te plaît|s il te plait)[\.\?!]*$/i.test(lastUserMsg.content.trim())) {
     return new Response(localChatbotReply(lastUserMsg.content), {
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
@@ -60,10 +63,14 @@ export async function POST(req: Request) {
     const stream = new ReadableStream({
       async start(controller) {
         try {
+          logger.info('route/chat', 'Démarrage scraping', { url });
           for await (const event of scrapeExhibitorsStream(url)) {
+            if (event.type === 'done') logger.info('route/chat', 'Scraping terminé', { total: event.total });
+            if (event.type === 'error') logger.error('route/chat', 'Erreur scraping', { message: event.message });
             controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
           }
         } catch (error: any) {
+          logger.error('route/chat', 'Erreur critique scraping', { message: error?.message });
           controller.enqueue(encoder.encode(JSON.stringify({ type: 'error', message: error?.message }) + '\n'));
         } finally {
           controller.close();
@@ -113,18 +120,23 @@ Ne dis pas seulement qu'il faut coller une URL, sauf si l'utilisateur fournit ef
   const tryGenerate = async (project?: string) => {
     for (const modelName of modelCandidates) {
       try {
+        logger.info('route/chat', 'Tentative modèle', { model: modelName });
         const openaiClient = createOpenAI({ apiKey: openAIKey, project });
-        return await generateText({
+        const result = await generateText({
           model: openaiClient.chat(modelName),
           messages,
           system: systemPrompt,
         });
+        logger.info('route/chat', 'Réponse chatbot générée', { model: modelName });
+        return result;
       } catch (error: any) {
         const msg = String(error?.message || error || '').toLowerCase();
         if (msg.includes('openai-project header should match project') || msg.includes('mismatched_project')) {
+          logger.warn('route/chat', 'Mismatch project OpenAI', { model: modelName });
           throw error;
         }
         if (msg.includes('model_not_found') || msg.includes('does not have access to model') || msg.includes('model not found')) {
+          logger.warn('route/chat', 'Modèle indisponible, tentative suivante', { model: modelName });
           continue;
         }
         throw error;
@@ -142,6 +154,7 @@ Ne dis pas seulement qu'il faut coller une URL, sauf si l'utilisateur fournit ef
       },
     });
   } catch (error: any) {
+    logger.error('route/chat', 'Erreur chatbot', { message: error?.message });
     const message = String(error?.message || error).toLowerCase();
     const shouldFallback = openAIProject && (
       message.includes('openai-project header should match project') ||
