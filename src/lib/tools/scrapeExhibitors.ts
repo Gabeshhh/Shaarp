@@ -47,13 +47,21 @@ function extractPhones(text: string) {
   );
 }
 
+// Known media/platform domains that appear on event pages but are NOT company websites
+const EXCLUDED_DOMAINS = new Set([
+  'twitter.com', 'x.com', 'linkedin.com', 'facebook.com', 'instagram.com',
+  'youtube.com', 'ft.com', 'bloomberg.com', 'reuters.com', 'techcrunch.com',
+  'forbes.com', 'wired.com', 'theverge.com', 'gsma.com', 'qt.eu',
+  'google.com', 'apple.com', 'microsoft.com', 'wikipedia.org',
+]);
+
 function isProbablyWebsite(href: string) {
   try {
     const u = new URL(href);
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
-    const host = u.hostname.toLowerCase();
+    const host = u.hostname.toLowerCase().replace(/^www\./, '');
     if (!host || host === 'localhost') return false;
-    if (host.includes('twitter.com') || host.includes('x.com') || host.includes('linkedin.com')) return false;
+    if (EXCLUDED_DOMAINS.has(host)) return false;
     return true;
   } catch {
     return false;
@@ -108,40 +116,50 @@ async function collectExhibitorLinks(
     const { links, names } = await page.evaluate((base: string) => {
       const anchors = Array.from(document.querySelectorAll('a[href]'));
       const result: { links: string[]; names: string[] } = { links: [], names: [] };
+      const origin = new URL(base).origin;
+      // Depth of the input URL (e.g. /exhibitors = depth 1, /fr/exhibitors = depth 2)
+      const basePathDepth = base.replace(origin, '').split('/').filter(Boolean).length;
 
       for (const a of anchors) {
         const href = (a as HTMLAnchorElement).href;
         const text = (a as HTMLElement).innerText?.trim();
 
-        // Heuristic: exhibitor detail pages typically contain "exhibitor" or "exposant" in URL
-        // Or they are links inside a list/grid with short text (company names)
-        if (
-          href &&
-          text &&
-          text.length > 1 &&
-          text.length < 150 &&
-          !href.includes('#') &&
-          !href.includes('javascript:') &&
-          (
-            href.includes('/exhibitor') ||
-            href.includes('/exposant') ||
-            href.includes('/company') ||
-            href.includes('/sponsor') ||
-            // Generic: same domain, looks like a detail page
-            (href.startsWith(new URL(base).origin) && href.split('/').length > 4)
-          )
-        ) {
-          result.links.push(href);
-          result.names.push(text);
-        }
+        if (!href || !text || text.length <= 1 || text.length >= 150) continue;
+        if (href.includes('#') || href.includes('javascript:')) continue;
+
+        // Must be same domain — avoids picking up linkedin, ft.com, etc.
+        if (!href.startsWith(origin)) continue;
+
+        // Must contain a numeric ID (exhibitor profiles always have one, nav items don't)
+        if (!/\/\d{3,}/.test(href)) continue;
+
+        // Must be exactly 1 level deeper than the base URL
+        // e.g. base=/exhibitors (depth 1) → allow /exhibitors/33647-company (depth 2)
+        // Rejects sub-product pages like /exhibitors/33647-company/data-centres (depth 3)
+        const hrefDepth = href.replace(origin, '').split('/').filter(Boolean).length;
+        if (hrefDepth !== basePathDepth + 1) continue;
+
+        result.links.push(href);
+        result.names.push(text);
       }
       return result;
     }, baseUrl);
 
-    for (const link of links) {
-      allLinks.add(link);
+    // Deduplicate by numeric ID — keep the shortest URL for each ID
+    // (same company can appear with different anchor texts on the listing page)
+    const idMap = new Map<string, { link: string; name: string }>();
+    for (let i = 0; i < links.length; i++) {
+      const idMatch = links[i].match(/\/(\d{3,})/);
+      if (idMatch) {
+        const id = idMatch[1];
+        if (!idMap.has(id) || links[i].length < idMap.get(id)!.link.length) {
+          idMap.set(id, { link: links[i], name: names[i] || `Exposant ${id}` });
+        }
+      }
     }
-    for (const name of names) {
+
+    for (const { link, name } of idMap.values()) {
+      allLinks.add(link);
       if (!allNames.includes(name)) allNames.push(name);
     }
 
