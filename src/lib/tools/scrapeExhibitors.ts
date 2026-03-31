@@ -4,6 +4,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { zodSchema } from 'ai';
 import { extractionProcessSchema, singleExhibitorProcessSchema, Exhibitor } from '../schema';
 import { logger } from '../logger';
+import { findPhoneNumbersInText } from 'libphonenumber-js';
 
 function normalizeOpenAIProject(rawProject: string | undefined, apiKey: string | undefined): string | undefined {
   if (!rawProject) return undefined;
@@ -29,12 +30,21 @@ function extractEmails(text: string) {
 }
 
 function extractPhones(text: string) {
-  // Heuristique volontairement permissive (formats internationaux + séparateurs)
-  const matches = text.match(/(\+?\d[\d\s().-]{6,}\d)/g) ?? [];
-  const cleaned = matches
-    .map(m => m.replace(/\s+/g, ' ').trim())
-    .filter(m => m.replace(/[^\d]/g, '').length >= 8);
-  return uniq(cleaned);
+  // libphonenumber-js valide les numéros de téléphone réels (rejette fragments, dates, codes produits...)
+  const found = findPhoneNumbersInText(text);
+  if (found.length > 0) {
+    return uniq(found.map(p => p.number.number as string));
+  }
+  // Fallback regex si libphonenumber ne trouve rien : uniquement formats +CC ou 00CC
+  const matches = text.match(/(?:\+|00)\d{1,3}[\s\-.]?\(?\d{1,4}\)?[\s\-.]?\d{2,4}[\s\-.]?\d{2,4}(?:[\s\-.]?\d{1,4})?/g) ?? [];
+  return uniq(
+    matches
+      .map(m => m.replace(/\s+/g, ' ').trim())
+      .filter(m => {
+        const digits = m.replace(/[^\d]/g, '');
+        return digits.length >= 8 && digits.length <= 15;
+      })
+  );
 }
 
 function isProbablyWebsite(href: string) {
