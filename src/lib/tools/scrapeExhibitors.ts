@@ -17,7 +17,7 @@ const openAIKey = process.env.OPENAI_API_KEY?.trim();
 const openAIProject = normalizeOpenAIProject(process.env.OPENAI_PROJECT?.trim(), openAIKey);
 const openaiClient = createOpenAI({ apiKey: openAIKey, project: openAIProject });
 
-const randomDelay = (min = 800, max = 1500) => new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min)) + min));
+const randomDelay = (min = 2500, max = 3500) => new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min)) + min));
 
 function uniq(values: string[]) {
   return Array.from(new Set(values.map(v => v.trim()).filter(Boolean)));
