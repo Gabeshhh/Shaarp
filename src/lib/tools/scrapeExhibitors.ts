@@ -1,8 +1,20 @@
 import { chromium, Page, BrowserContext } from 'playwright';
 import { generateObject } from 'ai';
-import { openai } from '@ai-sdk/openai';
+import { createOpenAI } from '@ai-sdk/openai';
 import { zodSchema } from 'ai';
 import { extractionProcessSchema, singleExhibitorProcessSchema, Exhibitor } from '../schema';
+
+function normalizeOpenAIProject(rawProject: string | undefined, apiKey: string | undefined): string | undefined {
+  if (!rawProject) return undefined;
+  const project = rawProject.trim();
+  if (!project || project === apiKey) return undefined;
+  if (project.startsWith('sk-')) return undefined;
+  return project;
+}
+
+const openAIKey = process.env.OPENAI_API_KEY?.trim();
+const openAIProject = normalizeOpenAIProject(process.env.OPENAI_PROJECT?.trim(), openAIKey);
+const openaiClient = createOpenAI({ apiKey: openAIKey, project: openAIProject });
 
 const randomDelay = (min = 800, max = 1500) => new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min)) + min));
 
@@ -174,6 +186,10 @@ async function scrapeExhibitorDetail(
   fallbackName: string
 ): Promise<Exhibitor | null> {
   const page = await context.newPage();
+  let fallbackEmails: string[] = [];
+  let fallbackPhones: string[] = [];
+  let fallbackWebsite = url;
+
   try {
     await page.goto(url, { waitUntil: 'networkidle', timeout: 20000 });
     await randomDelay(500, 1000);
@@ -201,26 +217,30 @@ async function scrapeExhibitorDetail(
       return { name: fallbackName, website: '', booth: '', linkedin: '', twitter: '', email: '', phone: '' };
     }
 
+    fallbackEmails = uniq([...mailtos, ...extractEmails(pageText)]);
+    fallbackPhones = uniq([...tels, ...extractPhones(pageText)]);
+    fallbackWebsite = pickBestWebsite(hrefs) || url;
     const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
 
     // Fallback “sans LLM”: extraction regex + mailto/tel + liens externes
     if (!hasOpenAIKey) {
-      const emails = uniq([...mailtos, ...extractEmails(pageText)]);
-      const phones = uniq([...tels, ...extractPhones(pageText)]);
-      const website = pickBestWebsite(hrefs) || url;
       return {
         name: fallbackName,
-        website,
+        website: fallbackWebsite,
         booth: '',
         linkedin: '',
         twitter: '',
-        email: emails.join('; '),
-        phone: phones.join('; '),
+        email: fallbackEmails.join('; '),
+        phone: fallbackPhones.join('; '),
       };
     }
 
+    const openAIKey = process.env.OPENAI_API_KEY?.trim();
+    const openAIProject = normalizeOpenAIProject(process.env.OPENAI_PROJECT?.trim(), openAIKey);
+    const openaiClient = createOpenAI({ apiKey: openAIKey, project: openAIProject });
+
     const { object } = await generateObject({
-      model: openai.chat('gpt-4o-mini'),
+      model: openaiClient.chat('gpt-4o-mini'),
       schema: zodSchema(singleExhibitorProcessSchema),
       prompt: `Voici le contenu d'une fiche exposant. TA MISSION : Extraire UNIQUEMENT les COORDONNÉES DE CONTACT (email, téléphone, site web, booth, réseaux sociaux).
 
@@ -229,10 +249,26 @@ IMPORTANT : Ne perds pas de temps avec les descriptions, l'historique de l'entre
 Utilise "${fallbackName}" si le nom n'est pas clair. Contenu :\n\n${pageText}`,
     });
 
-    return object.exhibitor;
+    return {
+      name: object.exhibitor.name || fallbackName,
+      website: object.exhibitor.website || fallbackWebsite,
+      booth: object.exhibitor.booth || '',
+      linkedin: object.exhibitor.linkedin || '',
+      twitter: object.exhibitor.twitter || '',
+      email: object.exhibitor.email?.trim() || fallbackEmails.join('; '),
+      phone: object.exhibitor.phone?.trim() || fallbackPhones.join('; '),
+    };
   } catch (error: any) {
-    console.warn(`[detail] Erreur sur ${url}: ${error.message}`);
-    return { name: fallbackName, website: url, booth: '', linkedin: '', twitter: '', email: '', phone: '' };
+    console.warn(`[detail] Erreur sur ${url}: ${error.message}. Utilisation du fallback local.`);
+    return {
+      name: fallbackName,
+      website: fallbackWebsite,
+      booth: '',
+      linkedin: '',
+      twitter: '',
+      email: fallbackEmails.join('; '),
+      phone: fallbackPhones.join('; '),
+    };
   } finally {
     await page.close();
   }
@@ -320,13 +356,16 @@ export async function* scrapeExhibitorsStream(url: string): AsyncGenerator<Scrap
       // Fallback: no detail links found, use LLM on the listing page text
       yield { type: 'status', message: `⚡ Aucun lien de détail trouvé. Extraction directe depuis la liste...` };
 
-      const { pageTitle, pageUrl, pageData } = await page.evaluate(() => {
+      const { pageTitle, pageUrl, pageData, hrefs } = await page.evaluate(() => {
         document.querySelectorAll('script, style, noscript, svg, iframe').forEach(el => el.remove());
         const main = document.querySelector('main') || document.querySelector('#content') || document.body;
+        const anchors = Array.from(document.querySelectorAll('a[href]')) as HTMLAnchorElement[];
+        const hrefList = anchors.map(a => a.href).filter(Boolean);
         return {
           pageTitle: document.title || '',
           pageUrl: window.location.href || '',
           pageData: main.innerText.substring(0, 150000),
+          hrefs: hrefList,
         };
       });
 
@@ -336,21 +375,31 @@ export async function* scrapeExhibitorsStream(url: string): AsyncGenerator<Scrap
       }
 
       const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
-      if (!hasOpenAIKey) {
-        const emails = extractEmails(pageData);
-        const phones = extractPhones(pageData);
-        const website = url;
+      const fallbackEmails = uniq([
+        ...extractEmails(pageData),
+        ...hrefs
+          .filter(h => h.startsWith('mailto:'))
+          .map(h => h.replace(/^mailto:/i, '').split('?')[0]),
+      ]);
+      const fallbackPhones = uniq([
+        ...extractPhones(pageData),
+        ...hrefs
+          .filter(h => h.startsWith('tel:'))
+          .map(h => h.replace(/^tel:/i, '')),
+      ]);
+      const fallbackWebsite = pickBestWebsite(hrefs) || url;
 
+      if (!hasOpenAIKey) {
         yield {
           type: 'exhibitor',
           exhibitor: {
             name: pageTitle || 'Liste exposants',
-            website,
+            website: fallbackWebsite,
             booth: '',
             linkedin: '',
             twitter: '',
-            email: emails.join('; '),
-            phone: phones.join('; '),
+            email: fallbackEmails.join('; '),
+            phone: fallbackPhones.join('; '),
           },
           current: 1,
           total: 1,
@@ -360,7 +409,7 @@ export async function* scrapeExhibitorsStream(url: string): AsyncGenerator<Scrap
       }
 
       const { object } = await generateObject({
-        model: openai.chat('gpt-4o-mini'),
+        model: openaiClient.chat('gpt-4o-mini'),
         schema: zodSchema(extractionProcessSchema),
         prompt: `Voici le contenu d'un site de salon professionnel.
 TA MISSION : Extraire TOUS les exposants avec UNIQUEMENT leurs COORDONNÉES DE CONTACT (email, téléphone, site web, stand/booth, réseaux sociaux).
@@ -377,16 +426,26 @@ URL : ${pageUrl}
 Contenu de la page :\n\n${pageData}`,
       });
 
-      for (let i = 0; i < object.exhibitors.length; i++) {
+      const mergedExhibitors = object.exhibitors.map((ex) => ({
+        name: ex.name || pageTitle || 'Liste exposants',
+        website: ex.website || fallbackWebsite,
+        booth: ex.booth || '',
+        linkedin: ex.linkedin || '',
+        twitter: ex.twitter || '',
+        email: ex.email?.trim() || fallbackEmails.join('; '),
+        phone: ex.phone?.trim() || fallbackPhones.join('; '),
+      }));
+
+      for (let i = 0; i < mergedExhibitors.length; i++) {
         yield {
           type: 'exhibitor',
-          exhibitor: object.exhibitors[i],
+          exhibitor: mergedExhibitors[i],
           current: i + 1,
-          total: object.exhibitors.length,
+          total: mergedExhibitors.length,
         };
       }
 
-      yield { type: 'done', total: object.exhibitors.length, message: `✅ Extraction terminée ! ${object.exhibitors.length} exposants trouvés.` };
+      yield { type: 'done', total: mergedExhibitors.length, message: `✅ Extraction terminée ! ${mergedExhibitors.length} exposants trouvés.` };
     }
 
   } catch (error: any) {

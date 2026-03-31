@@ -21,15 +21,6 @@ export function Chat({ messages, sendMessage, isLoading }: ChatProps) {
   const [chatbotPrompt, setChatbotPrompt] = useState('');
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (scrollAreaRef.current) {
-      const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
-      if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      }
-    }
-  }, [messages, isLoading]);
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = inputValue.trim();
@@ -47,9 +38,9 @@ export function Chat({ messages, sendMessage, isLoading }: ChatProps) {
   };
 
   return (
-    <div className="flex flex-1 flex-col h-full overflow-hidden">
-      <ScrollArea ref={scrollAreaRef} className="flex-1 h-full">
-        <div className="flex flex-col gap-3 p-4 pb-6">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <ScrollArea ref={scrollAreaRef} className="flex-1 min-h-0">
+        <div className="flex min-h-0 flex-col gap-3 p-4 pb-6">
           {messages.length === 0 && (
             <div className="flex flex-col gap-4 pt-8 px-2">
               <div className="flex flex-col items-center text-center gap-3 mb-2">
@@ -73,25 +64,6 @@ export function Chat({ messages, sendMessage, isLoading }: ChatProps) {
                   </div>
                 ))}
               </div>
-              <form onSubmit={handleChatbotSubmit} className="mt-1">
-                <div className="relative">
-                  <MessageSquare size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-300/80" />
-                  <Input
-                    value={chatbotPrompt}
-                    onChange={(e) => setChatbotPrompt(e.target.value)}
-                    placeholder="Pose une question au chatbot GPT-4 (ex: Qui expose dans la cybersécurité ?)"
-                    className="pl-8 pr-24 text-xs bg-slate-800 border-slate-700 text-slate-200 placeholder:text-slate-500 focus-visible:ring-blue-500/50 focus-visible:border-blue-500/50 h-10"
-                  />
-                  <Button
-                    type="submit"
-                    size="sm"
-                    disabled={isLoading || chatbotPrompt.trim().length === 0}
-                    className="absolute right-1 top-1/2 -translate-y-1/2 h-8 px-3 bg-blue-600 hover:bg-blue-500 text-white"
-                  >
-                    Envoyer
-                  </Button>
-                </div>
-              </form>
             </div>
           )}
 
@@ -130,25 +102,49 @@ export function Chat({ messages, sendMessage, isLoading }: ChatProps) {
       </ScrollArea>
 
       <div className="p-4 border-t border-slate-800 bg-slate-900/80 shrink-0">
-        <form onSubmit={handleSubmit} className="flex gap-2">
-          <div className="relative flex-1">
-            <Link2 size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-            <Input
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              placeholder="Collez une URL ou posez une question au chatbot GPT-4"
-              className="pl-8 text-xs bg-slate-800 border-slate-700 text-slate-200 placeholder:text-slate-600 focus-visible:ring-blue-500/50 focus-visible:border-blue-500/50 h-9"
-            />
-          </div>
-          <Button
-            type="submit"
-            size="icon"
-            disabled={isLoading || inputValue.length === 0}
-            className="h-9 w-9 bg-blue-600 hover:bg-blue-500 text-white border-0 shrink-0"
-          >
-            <Send size={14} />
-          </Button>
-        </form>
+        <div className="flex flex-col gap-2">
+          {/* Barre chatbot (au-dessus de l’URL) */}
+          <form onSubmit={handleChatbotSubmit} className="flex gap-2">
+            <div className="relative flex-1">
+              <MessageSquare size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-300/80" />
+              <Input
+                value={chatbotPrompt}
+                onChange={(e) => setChatbotPrompt(e.target.value)}
+                placeholder="Pose une question au chatbot GPT-4 (ex: Qui expose dans la cybersécurité ?)"
+                className="pl-8 pr-20 text-xs bg-slate-800 border-slate-700 text-slate-200 placeholder:text-slate-600 focus-visible:ring-blue-500/50 focus-visible:border-blue-500/50 h-9"
+              />
+            </div>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={isLoading || chatbotPrompt.trim().length === 0}
+              className="h-9 px-3 bg-blue-600 hover:bg-blue-500 text-white border-0 shrink-0"
+            >
+              Envoyer
+            </Button>
+          </form>
+
+          {/* Barre URL / entrée extraction */}
+          <form onSubmit={handleSubmit} className="flex gap-2">
+            <div className="relative flex-1">
+              <Link2 size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+              <Input
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                placeholder="Collez une URL du salon pour lancer l’extraction"
+                className="pl-8 text-xs bg-slate-800 border-slate-700 text-slate-200 placeholder:text-slate-600 focus-visible:ring-blue-500/50 focus-visible:border-blue-500/50 h-9"
+              />
+            </div>
+            <Button
+              type="submit"
+              size="icon"
+              disabled={isLoading || inputValue.length === 0}
+              className="h-9 w-9 bg-blue-600 hover:bg-blue-500 text-white border-0 shrink-0"
+            >
+              <Send size={14} />
+            </Button>
+          </form>
+        </div>
       </div>
     </div>
   );

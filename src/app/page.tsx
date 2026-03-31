@@ -205,8 +205,8 @@ export default function Home() {
             const { done, value } = await reader.read();
             if (done) break;
 
-            const chunk = decoder.decode(value, { stream: true });
-            assistantContent += chunk;
+const chunk = decoder.decode(value, { stream: true });
+assistantContent += chunk;
 
             setMessages(prev => {
               const updated = [...prev];
@@ -256,7 +256,7 @@ export default function Home() {
         </div>
 
         {/* Chat complètement à droite */}
-        <div className="flex w-full flex-col overflow-hidden bg-slate-900 border-l border-slate-800 order-3 lg:w-[380px] xl:w-[420px]">
+        <div className="flex w-full flex-col h-full overflow-hidden bg-slate-900 border-l border-slate-800 order-3 lg:w-[380px] xl:w-[420px]">
           <div className="flex h-16 items-center px-5 shrink-0 border-b border-slate-800">
             <div className="flex items-center gap-3">
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500 shadow-lg shadow-blue-500/30">
